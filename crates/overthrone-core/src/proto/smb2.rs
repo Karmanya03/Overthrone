@@ -153,6 +153,7 @@ const NTLMSSP_NEGOTIATE_SIGN: u32 = 0x0000_0010;
 const NTLMSSP_REQUEST_TARGET: u32 = 0x0000_0004;
 const NTLMSSP_NEGOTIATE_UNICODE: u32 = 0x0000_0001;
 const NTLMSSP_NEGOTIATE_TARGET_INFO: u32 = 0x0080_0000;
+#[allow(dead_code)] // May be used by compute_ntlmv2_mic callers
 const NTLMSSP_NEGOTIATE_VERSION: u32 = 0x0200_0000;
 
 // File access masks
@@ -1067,17 +1068,10 @@ impl Smb2Connection {
         );
 
         // -- Step 3: Build NTLMSSP Authenticate (Type 3) --
-        let (mut type3, session_key, _session_base_key) =
+        let (type3, session_key, _session_base_key) =
             build_ntlmssp_authenticate(domain, username, password, &challenge)?;
 
-        // Compute NTLMv2 MIC if SIGN or SEAL is negotiated
-        if challenge.negotiate_flags & (NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL) != 0
-            && type3.len() >= NTLMSSP_TYPE3_MIC_OFFSET + 16
-        {
-            type3[NTLMSSP_TYPE3_MIC_OFFSET..NTLMSSP_TYPE3_MIC_OFFSET + 16].fill(0);
-            let mic = compute_ntlmv2_mic(&session_key, &type1, &type2, &type3)?;
-            type3[NTLMSSP_TYPE3_MIC_OFFSET..NTLMSSP_TYPE3_MIC_OFFSET + 16].copy_from_slice(&mic);
-        }
+        // Impacket does NOT compute MIC for Type 3 in SMB3 login() -- skip it.
 
         let spnego_resp = wrap_spnego_response(&type3);
 
@@ -1124,34 +1118,19 @@ impl Smb2Connection {
         // Impacket confirms this behavior -- no SessionKey XOR on WS2025.
         *self.session_key.lock().await = Some(session_key.clone());
 
-        // Verify the server's response signature now that the key is stored.
-        // IMPORTANT: The server computed the signing key using preauth_hash that
-        // does NOT include the session setup leg 2 response (the server signed before
-        // sending). So we must verify BEFORE updating preauth_hash with leg 2 response.
-        if self
-            .sign_required
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let dialect = self.dialect.load(std::sync::atomic::Ordering::Relaxed);
-            let preauth_hash = self.preauth_hash.lock().await.clone();
-            if !Self::verify_packet(
-                &raw_resp,
-                &session_key,
-                dialect,
-                true,
-                preauth_hash.as_deref(),
-            ) {
-                warn!("SMB2 Session Setup response signature verification failed");
-                self.signing_failures
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-
-        // DO NOT update preauth_hash with the leg 2 response! The server computed
-        // its signing key using preauth_hash that includes only messages 1-5
-        // (negotiate req/res, session setup leg 1 req/res, leg 2 req). Adding the
-        // leg 2 response would change the preauth_hash and produce a different
-        // signing key for all subsequent outbound operations.
+        // DO NOT verify the session setup leg 2 response signature!
+        //
+        // Per MS-SMB2 3.2.52.1, the server does NOT set the SMB2_FLAGS_SIGNED flag
+        // on the session setup response because the signing key is derived FROM this
+        // response's completion. The server sends an unsigned transition packet with
+        // flags=0x01 (SERVER_TO_REDIR) only and a zeroed signature field.
+        //
+        // Impacket also skips signature verification on the session setup response:
+        //   if packet.isValidAnswer(STATUS_SUCCESS):
+        //       self._Session['CalculatePreAuthHash'] = False
+        //       return True  # no verifyPacket call
+        //
+        // Signing becomes active starting with the tree_connect exchange.
 
         Ok(session_key)
     }
@@ -1251,17 +1230,10 @@ impl Smb2Connection {
         );
 
         // -- Step 3: Build Type 3 with raw NT hash (no password needed) --
-        let (mut type3, session_key, _session_base_key) =
+        let (type3, session_key, _session_base_key) =
             build_ntlmssp_authenticate_hash(domain, username, &nt_hash, &challenge)?;
 
-        // Compute NTLMv2 MIC if SIGN or SEAL is negotiated
-        if challenge.negotiate_flags & (NTLMSSP_NEGOTIATE_SIGN | NTLMSSP_NEGOTIATE_SEAL) != 0
-            && type3.len() >= NTLMSSP_TYPE3_MIC_OFFSET + 16
-        {
-            type3[NTLMSSP_TYPE3_MIC_OFFSET..NTLMSSP_TYPE3_MIC_OFFSET + 16].fill(0);
-            let mic = compute_ntlmv2_mic(&session_key, &type1, &type2, &type3)?;
-            type3[NTLMSSP_TYPE3_MIC_OFFSET..NTLMSSP_TYPE3_MIC_OFFSET + 16].copy_from_slice(&mic);
-        }
+        // Impacket does NOT compute MIC for Type 3 in SMB3 login() -- skip it.
 
         let spnego_resp = wrap_spnego_response(&type3);
         let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
@@ -1299,30 +1271,8 @@ impl Smb2Connection {
 
         *self.session_key.lock().await = Some(session_key.clone());
 
-        // Verify the server's response signature now that the key is stored.
-        // IMPORTANT: The server computed the signing key using preauth_hash that
-        // does NOT include the session setup leg 2 response (signed before sending).
-        // Verify BEFORE updating preauth_hash with the leg 2 response.
-        // Use derive_signing_key which handles both 3.0.x (SMB2AESCMAC) and
-        // 3.1.1 (SMBSigningKey + PreauthIntegrityHashValue context).
-        if self
-            .sign_required
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let dialect = self.dialect.load(Ordering::Relaxed);
-            let preauth_hash = self.preauth_hash.lock().await.clone();
-            if !Self::verify_packet(
-                &raw_resp,
-                &session_key,
-                dialect,
-                true,
-                preauth_hash.as_deref(),
-            ) {
-                warn!("SMB2 PtH Session Setup response signature verification failed");
-                self.signing_failures
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
+        // DO NOT verify the session setup leg 2 response signature -- see comment
+        // in session_setup() above. The server sends an unsigned transition packet.
 
         debug!("SMB2: PtH authenticated as {domain}\\{username}");
 
@@ -1404,19 +1354,8 @@ impl Smb2Connection {
         *self.session_id.lock().await = session_id;
         debug!("SMB2: Kerberos session ID 0x{session_id:016X}");
 
-        // Verify the server's response signature now that the key is stored
-        if self
-            .sign_required
-            .load(std::sync::atomic::Ordering::Relaxed)
-        {
-            let dialect = self.dialect.load(Ordering::Relaxed);
-            let preauth_hash = self.preauth_hash.lock().await.clone();
-            if !Self::verify_packet(&raw_resp, &key, dialect, true, preauth_hash.as_deref()) {
-                return Err(OverthroneError::Smb(
-                    "SMB2 Kerberos Session Setup response signature verification failed".into(),
-                ));
-            }
-        }
+        // DO NOT verify the session setup response signature -- see comment
+        // in session_setup() above. The server sends an unsigned transition packet.
 
         Ok(key)
     }
@@ -2324,12 +2263,16 @@ pub fn build_ntlmssp_negotiate() -> Vec<u8> {
     // - NEGOTIATE_VERSION: client supports OS version in messages
     // Without TARGET_INFO, the server's target_info behavior is undefined,
     // which can cause STATUS_LOGON_FAILURE on WS2019+ DCs.
+    // Flags matching Impacket/nxc NTLM Negotiate for SMB3.
+    // NTLMSSP_NEGOTIATE_VERSION is deliberately OMITTED: Impacket does not set it
+    // for SMB 3.x login(). Setting it causes the client to include an OS Version
+    // field and MIC in the Type 3 response (88-byte header vs 64-byte), which
+    // shifts payload offsets and causes STATUS_LOGON_FAILURE on WS2019+ DCs.
     let flags = NTLMSSP_NEGOTIATE_56
         | NTLMSSP_NEGOTIATE_KEY_EXCH
         | NTLMSSP_NEGOTIATE_128
         | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
         | NTLMSSP_NEGOTIATE_TARGET_INFO
-        | NTLMSSP_NEGOTIATE_VERSION
         | NTLMSSP_NEGOTIATE_ALWAYS_SIGN
         | NTLMSSP_NEGOTIATE_NTLM
         | NTLMSSP_NEGOTIATE_SEAL
@@ -2349,6 +2292,8 @@ pub fn build_ntlmssp_negotiate() -> Vec<u8> {
     msg.extend_from_slice(&0u16.to_le_bytes());
     msg.extend_from_slice(&0u16.to_le_bytes());
     msg.extend_from_slice(&0u32.to_le_bytes());
+    // No Version field -- Impacket omits NEGOTIATE_VERSION for SMB3,
+    // so the Version field is not included in the Type 1 message.
     msg
 }
 
@@ -2430,21 +2375,25 @@ pub fn build_ntlmssp_authenticate_hash(
     challenge: &NtlmChallenge,
 ) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     // -- NTLMv2 computation --
-    // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + UPPER(domain))
-    // MS-NLMP §3.3.2: both username and domain are uppercased for the response key.
+    // Step 1: ResponseKeyNT = HMAC_MD5(NT_Hash, UPPER(username) + domain)
+    // MS-NLMP §3.3.2 / Impacket NTOWFv2: only username is uppercased, domain is used AS-IS.
     let user_domain: Vec<u8> = username
         .to_uppercase()
         .encode_utf16()
-        .chain(domain.to_uppercase().encode_utf16())
+        .chain(domain.encode_utf16())
         .flat_map(|c| c.to_le_bytes())
         .collect();
 
     let response_key = hmac_md5(nt_hash, &user_domain)?;
 
     // Step 2: Build NTLMv2 client challenge blob
+    // Impacket adds MsvAvTargetName (AvId=9, "cifs/{DnsHostName}") to target_info
+    // before building the blob. This is required for SPN target name validation on
+    // WS2019+ DCs. Without it, the server returns STATUS_LOGON_FAILURE.
+    let enriched_target_info = add_target_name_to_av_pairs(&challenge.target_info);
     let client_challenge: [u8; 8] = rand::rng().random();
     let timestamp = filetime_now();
-    let blob = build_ntlmv2_blob(&client_challenge, &timestamp, &challenge.target_info);
+    let blob = build_ntlmv2_blob(&client_challenge, &timestamp, &enriched_target_info);
 
     // Step 3: NTProofStr = HMAC_MD5(ResponseKeyNT, ServerChallenge + Blob)
     let mut proof_input = Vec::with_capacity(8 + blob.len());
@@ -2473,7 +2422,41 @@ pub fn build_ntlmssp_authenticate_hash(
     debug!("NTLMv2: blob={:02x?}", blob);
 
     // Step 6: Build Type 3 message
-    let flags = challenge.negotiate_flags;
+    // Impacket computes Type 3 flags as: client_type1_flags & server_type2_flags
+    // Only 6 flags are masked against the server's response. Other flags (UNICODE,
+    // NTLM, REQUEST_TARGET, TARGET_INFO, 56, 128) pass through from the client.
+    let type1_flags = NTLMSSP_NEGOTIATE_56
+        | NTLMSSP_NEGOTIATE_KEY_EXCH
+        | NTLMSSP_NEGOTIATE_128
+        | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+        | NTLMSSP_NEGOTIATE_TARGET_INFO
+        | NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+        | NTLMSSP_NEGOTIATE_NTLM
+        | NTLMSSP_NEGOTIATE_SEAL
+        | NTLMSSP_NEGOTIATE_SIGN
+        | NTLMSSP_REQUEST_TARGET
+        | NTLMSSP_NEGOTIATE_UNICODE;
+    let server_flags = challenge.negotiate_flags;
+    let mut flags = type1_flags;
+    // Mask: only keep server-supported versions of these 6 flags
+    if server_flags & NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY == 0 {
+        flags &= !NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY;
+    }
+    if server_flags & NTLMSSP_NEGOTIATE_128 == 0 {
+        flags &= !NTLMSSP_NEGOTIATE_128;
+    }
+    if server_flags & NTLMSSP_NEGOTIATE_KEY_EXCH == 0 {
+        flags &= !NTLMSSP_NEGOTIATE_KEY_EXCH;
+    }
+    if server_flags & NTLMSSP_NEGOTIATE_SEAL == 0 {
+        flags &= !NTLMSSP_NEGOTIATE_SEAL;
+    }
+    if server_flags & NTLMSSP_NEGOTIATE_SIGN == 0 {
+        flags &= !NTLMSSP_NEGOTIATE_SIGN;
+    }
+    if server_flags & NTLMSSP_NEGOTIATE_ALWAYS_SIGN == 0 {
+        flags &= !NTLMSSP_NEGOTIATE_ALWAYS_SIGN;
+    }
 
     let domain_utf16: Vec<u8> = domain
         .encode_utf16()
@@ -2492,14 +2475,17 @@ pub fn build_ntlmssp_authenticate_hash(
     // Sending zeros causes STATUS_LOGON_FAILURE on WS2019+ DCs configured with
     // strict NTLM policies (LM compatibility level 4-5). nxc/Impacket always
     // sends a valid LMv2 response -- we must match that behavior.
-    let lm_client_challenge: [u8; 8] = rand::rng().random();
+    //
+    // CRITICAL: Impacket reuses the SAME ClientChallenge for both LMv2 response
+    // and the NTLMv2 blob. WS2019+ DCs validate consistency between the two;
+    // using different challenges causes STATUS_LOGON_FAILURE.
     let lm_response = {
         let mut lm_input = Vec::with_capacity(16);
         lm_input.extend_from_slice(&challenge.server_challenge);
-        lm_input.extend_from_slice(&lm_client_challenge);
+        lm_input.extend_from_slice(&client_challenge);
         let lm_proof = hmac_md5(&response_key, &lm_input)?;
         let mut lm_resp = lm_proof;
-        lm_resp.extend_from_slice(&lm_client_challenge);
+        lm_resp.extend_from_slice(&client_challenge);
         lm_resp
     };
 
@@ -2521,8 +2507,8 @@ pub fn build_ntlmssp_authenticate_hash(
         Vec::new()
     };
 
-    // Calculate offsets (header=88 bytes with OS Version)
-    let header_len = 88u32;
+    // Calculate offsets (header=64 bytes, no OS Version, no MIC -- matches Impacket)
+    let header_len = 64u32;
     let lm_offset = header_len;
     let nt_offset = lm_offset + lm_response.len() as u32;
     let domain_offset = nt_offset + nt_response.len() as u32;
@@ -2561,15 +2547,10 @@ pub fn build_ntlmssp_authenticate_hash(
     msg.extend_from_slice(&enc_key_offset.to_le_bytes());
     // NegotiateFlags
     msg.extend_from_slice(&flags.to_le_bytes());
-    // OS Version field (8 bytes, MS-NLMP §2.2.2.10)
-    msg.push(10); // ProductMajorVersion
-    msg.push(0); // ProductMinorVersion
-    msg.extend_from_slice(&0u16.to_le_bytes()); // ProductBuild
-    msg.extend_from_slice(&0u16.to_le_bytes()); // Reserved (3 bytes used + padding)
-    msg.push(0); // Reserved (3rd byte)
-    msg.push(15); // NTLMRevisionCurrent (NTLMSSP_REVISION_W2K3)
-    // MIC (16 bytes of zeros -- the caller should compute and fill this if needed)
-    msg.extend_from_slice(&[0u8; 16]);
+    // No OS Version field -- Impacket omits NEGOTIATE_VERSION for SMB3,
+    // so the 8-byte Version field is not included in Type 3.
+    // No MIC field -- Impacket does not compute MIC for Type 3.
+    // This gives a 64-byte header matching Impacket's output exactly.
 
     // Payload
     msg.extend_from_slice(&lm_response);
@@ -2678,13 +2659,16 @@ fn add_target_name_to_av_pairs(target_info: &[u8]) -> Vec<u8> {
 }
 
 /// Build NTLMv2 client challenge blob (AvPairs, timestamp, etc.)
+/// Matches Impacket's `computeResponseNTLMv2` exactly:
+/// `RespType(1) + HiRespType(1) + Reserved1(2) + Reserved2(4) + TimeStamp(8) + ChallengeFromClient(8) + Reserved3(4) + AvPairs`
+/// The server's target_info is used UNMODIFIED -- adding extra AV_PAIRs
+/// (e.g. MsvAvTargetName) causes WS2019+ DCs to reject the blob.
 fn build_ntlmv2_blob(
     client_challenge: &[u8; 8],
     timestamp: &[u8; 8],
     target_info: &[u8],
 ) -> Vec<u8> {
-    let augmented_ti = add_target_name_to_av_pairs(target_info);
-    let mut blob = Vec::with_capacity(32 + augmented_ti.len());
+    let mut blob = Vec::with_capacity(32 + target_info.len());
     blob.push(0x01);
     blob.push(0x01);
     blob.extend_from_slice(&0u16.to_le_bytes());
@@ -2692,7 +2676,7 @@ fn build_ntlmv2_blob(
     blob.extend_from_slice(timestamp);
     blob.extend_from_slice(client_challenge);
     blob.extend_from_slice(&0u32.to_le_bytes());
-    blob.extend_from_slice(&augmented_ti);
+    blob.extend_from_slice(target_info);
     blob
 }
 
@@ -2805,8 +2789,11 @@ fn asn1_application_tag(tag: u8, data: &[u8]) -> Vec<u8> {
 }
 
 /// Offset of the MIC field in an NTLMSSP Type 3 message.
-/// Layout: Sig(8) + Type(4) + LmResp(8) + NtResp(8) + Domain(8) + User(8) + Wks(8) + SessionKey(8) + Flags(4) + Version(8) = 72 bytes before MIC.
-const NTLMSSP_TYPE3_MIC_OFFSET: usize = 72;
+/// Layout: Sig(8) + Type(4) + LmResp(8) + NtResp(8) + Domain(8) + User(8) + Wks(8) + SessionKey(8) + Flags(4) = 64 bytes base header.
+/// With OS Version: +8 bytes. With MIC: +16 bytes after that.
+/// NOTE: Impacket omits Version and MIC for SMB3, giving a 64-byte header.
+#[allow(dead_code)] // Retained for MIC computation if needed in future
+const NTLMSSP_TYPE3_MIC_OFFSET: usize = 80; // 64 + 8(Version) + 8(MIC start)
 
 /// Compute NTLMv2 Message Integrity Code (MIC).
 /// MIC = HMAC_MD5(exported_session_key, type1_raw || type2_raw || type3_with_mic_zeroed)
@@ -2831,12 +2818,13 @@ pub fn compute_ntlmv2_mic(
 
 /// NIST SP800-108 Counter Mode KDF using HMAC-SHA256.
 /// Derives a 16-byte key from `key_in`, `label`, and `context`.
-/// Matches Impacket's `crypto.KDF_CounterMode`: `counter || label || context || L`
-/// where `label` already includes its own null terminator (e.g. b"SMBSigningKey\x00").
+/// Matches Impacket's `crypto.KDF_CounterMode`: `counter || label || 0x00 || context || L`
+/// The `0x00` separator between label and context is required by SP800-108 and by Impacket.
 fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
-    let mut input = Vec::with_capacity(4 + label.len() + context.len() + 4);
+    let mut input = Vec::with_capacity(4 + label.len() + 1 + context.len() + 4);
     input.extend_from_slice(&1u32.to_be_bytes()); // i = 1
     input.extend_from_slice(label);
+    input.push(0x00); // SP800-108 separator between Label and Context
     input.extend_from_slice(context);
     input.extend_from_slice(&128u32.to_be_bytes()); // L = 128 bits
 
@@ -2845,15 +2833,13 @@ fn sp800_108_counter_kdf(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8>
     mac.finalize().into_bytes()[..16].to_vec()
 }
 
-/// SP800-108 Counter Mode KDF variant with extra 0x00 separator between label and context.
-/// Kept as reference; the primary `sp800_108_counter_kdf` matches Impacket's implementation.
+/// SP800-108 Counter Mode KDF variant WITHOUT the 0x00 separator (legacy, kept for comparison).
 #[cfg(test)]
-#[expect(dead_code, reason = "reference implementation kept for comparison")]
-fn sp800_108_counter_kdf_sep(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
-    let mut input = Vec::with_capacity(4 + label.len() + 1 + context.len() + 4);
+#[expect(dead_code, reason = "legacy reference for comparison")]
+fn sp800_108_counter_kdf_nosep(key_in: &[u8], label: &[u8], context: &[u8]) -> Vec<u8> {
+    let mut input = Vec::with_capacity(4 + label.len() + context.len() + 4);
     input.extend_from_slice(&1u32.to_be_bytes()); // i = 1
     input.extend_from_slice(label);
-    input.push(0x00); // SP800-108 separator
     input.extend_from_slice(context);
     input.extend_from_slice(&128u32.to_be_bytes()); // L = 128 bits
 

@@ -171,8 +171,12 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
         parse_samr_enumerate_domains, parse_samr_enumerate_users, parse_samr_lookup_ids,
     };
 
-    let bind_resp = smb.pipe_transact("samr", &build_samr_bind()).await?;
+    // Use persistent pipe so the DCE/RPC binding survives across all SAMR calls.
+    let fid = smb.open_pipe_persistent("samr").await?;
+
+    let bind_resp = smb.ioctl_pipe_persistent(&fid, &build_samr_bind()).await?;
     if !is_rpc_bind_accepted(&bind_resp) {
+        let _ = smb.close_pipe_persistent(&fid).await;
         return Err(OverthroneError::Smb(format!(
             "SAMR RPC bind on {} failed: response {} bytes, expected BIND-ACK",
             config.target,
@@ -180,7 +184,9 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
         )));
     }
 
-    let connect_resp = smb.pipe_transact("samr", &build_samr_connect()).await?;
+    let connect_resp = smb
+        .ioctl_pipe_persistent(&fid, &build_samr_connect())
+        .await?;
     let server_handle = extract_rpc_handle(&connect_resp).ok_or_else(|| {
         OverthroneError::Smb(format!(
             "SamrConnect on {} failed: response {} bytes, cannot extract handle",
@@ -190,7 +196,7 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
     })?;
 
     let enum_resp = smb
-        .pipe_transact("samr", &build_samr_enumerate_domains(&server_handle))
+        .ioctl_pipe_persistent(&fid, &build_samr_enumerate_domains(&server_handle))
         .await?;
     let domains = parse_samr_enumerate_domains(&enum_resp);
     let primary_domain = domains
@@ -212,7 +218,7 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
         debug!("[SAMR] Querying RIDs {current_rid}-{batch_end}...");
 
         let open_domain_req = build_samr_open_domain_by_sid(&server_handle, &domain_sid_bytes);
-        let domain_resp = match smb.pipe_transact("samr", &open_domain_req).await {
+        let domain_resp = match smb.ioctl_pipe_persistent(&fid, &open_domain_req).await {
             Ok(r) => r,
             Err(e) => {
                 warn!("[SAMR] OpenDomain failed: {e}");
@@ -228,15 +234,13 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
             }
         };
 
-        // Try SamEnumerateUsersInDomain (opnum 13) first — this is the proper API
-        // used by nxc/enum4linux for user discovery. Falls back to blind RID cycling
-        // if the server doesn't support enumeration or returns no results.
+        // Try SamEnumerateUsersInDomain (opnum 13) first
         if results.is_empty() && current_rid == config.start_rid {
             let mut resume = [0u8; 4];
             loop {
                 let enum_users_req =
                     build_samr_enumerate_users(&domain_handle, &resume, 0xFFFFFFFF);
-                match smb.pipe_transact("samr", &enum_users_req).await {
+                match smb.ioctl_pipe_persistent(&fid, &enum_users_req).await {
                     Ok(resp) => {
                         let (users, new_resume, done) = parse_samr_enumerate_users(&resp);
                         if users.is_empty() {
@@ -276,13 +280,14 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
                     "[SAMR] SamEnumerateUsersInDomain found {} accounts, skipping blind RID cycling",
                     results.len()
                 );
+                let _ = smb.close_pipe_persistent(&fid).await;
                 return Ok(results);
             }
         }
 
         // Fallback: blind RID cycling via LookupIdsInDomain
         let lookup_req = build_samr_lookup_ids(&domain_handle, &rids);
-        match smb.pipe_transact("samr", &lookup_req).await {
+        match smb.ioctl_pipe_persistent(&fid, &lookup_req).await {
             Ok(resp) => {
                 let parsed = parse_samr_lookup_ids(&resp, &rids);
                 for (rid, name, acct_type) in parsed {
@@ -306,6 +311,8 @@ async fn rid_cycle_samr(config: &RidCycleConfig) -> Result<Vec<RidResult>> {
 
         current_rid = batch_end + 1;
     }
+
+    let _ = smb.close_pipe_persistent(&fid).await;
 
     info!(
         "[SAMR] RID cycling complete: {} accounts discovered",
