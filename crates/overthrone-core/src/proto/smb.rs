@@ -2728,26 +2728,19 @@ fn build_srvsvc_net_share_enum_req(server: &str) -> Vec<u8> {
 }
 
 /// Parse share names from a SRVSVC NetShareEnumAll response.
-/// Layout (stub after 24-byte DCE/RPC header):
-///   Level(4) + container_ptr(4) + TotalEntries(4) + resume_ptr(4) + rc(4)   = 20 bytes
-///   [deferred] cEntries(4) + array_ptr(4)                                    = 8 bytes
-///   [deferred] max_count(4) + N * SHARE_INFO_1{ name_ptr(4)+type(4)+remark_ptr(4) }
-///   [deferred strings: (name_str, remark_str) per entry]
+/// Layout (stub after 20-byte DCE/RPC response header):
+/// `return_code(4) + InfoStruct.referent(4) + level(4) + Info1.referent(4)
+/// + entries_read(4) + Buffer.referent(4) + max_count(4)
+/// + N * SHARE_INFO_1{ name_ref(4)+type(4)+remark_ref(4) }
+/// + [deferred strings: (name_str, remark_str) per entry]`
 fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
-    // DCE/RPC response PDU: 20-byte header (12 common + 8 response-specific)
-    //   common: version(1) + endianness(1) + packet_type(1) + flags(1) + frag_len(2) + auth_len(2) + call_id(4)
-    //   response: alloc_hint(4) + context_id(2) + cancel_count(1) + reserved(1)
-    // Stub data starts at offset 20.
     const HDR: usize = 20;
-    if resp.len() < HDR + 8 {
+    if resp.len() < HDR + 28 {
         debug!("SRVSVC: response too short: {} bytes", resp.len());
         return Vec::new();
     }
-
     let s = &resp[HDR..];
 
-    // The stub layout for NetShareEnumAll response:
-    //   NET_API_STATUS return_code (4 bytes) — first field in NDR response stub
     let return_code = u32::from_le_bytes([s[0], s[1], s[2], s[3]]);
     if return_code != 0 {
         debug!(
@@ -2756,69 +2749,73 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
         );
     }
 
-    // The rest is the LPSHARE_INFO_1_CONTAINER output parameter.
-    // NDR unique pointer (4 bytes) pointing to the container, or 0x00000000.
-    if s.len() < 12 {
-        return Vec::new();
-    }
-    let container_ptr = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
-    if container_ptr == 0 {
+    // InfoStruct referent at s[4..8] (non-null means valid)
+    let info_struct_ref = u32::from_le_bytes([s[4], s[5], s[6], s[7]]);
+    if info_struct_ref == 0 {
         return Vec::new();
     }
 
-    // EntriesRead at s[8..12]
-    let entry_count = u32::from_le_bytes([s[8], s[9], s[10], s[11]]) as usize;
-    if entry_count == 0 {
+    // Level at s[8..12] (must be 1)
+    let level = u32::from_le_bytes([s[8], s[9], s[10], s[11]]);
+    if level != 1 {
+        debug!("SRVSVC: unexpected level {}", level);
         return Vec::new();
     }
 
-    // Buffer pointer at s[12..16] (NDR unique pointer to SHARE_INFO_1 array)
-    let buffer_ptr = u32::from_le_bytes([s[12], s[13], s[14], s[15]]);
-    if buffer_ptr == 0 {
-        debug!("SRVSVC: buffer_ptr=0 but entry_count={}", entry_count);
+    // Info1 referent at s[12..16] (non-null means valid)
+    let info1_ref = u32::from_le_bytes([s[12], s[13], s[14], s[15]]);
+    if info1_ref == 0 {
         return Vec::new();
     }
 
-    // NDR array: max_count(4) + [each entry: name_ptr(4) + type(4) + remark_ptr(4)]
-    const ARR_OFF: usize = 16;
-    if s.len() < ARR_OFF + 4 {
-        return Vec::new();
-    }
-    let max_count =
-        u32::from_le_bytes([s[ARR_OFF], s[ARR_OFF + 1], s[ARR_OFF + 2], s[ARR_OFF + 3]]) as usize;
-    let actual = max_count.min(entry_count);
+    // EntriesRead at s[16..20]
+    let entry_count = u32::from_le_bytes([s[16], s[17], s[18], s[19]]) as usize;
 
-    if s.len() < ARR_OFF + 4 + actual * 12 {
+    // Buffer referent at s[20..24] (non-null means valid)
+    let buffer_ref = u32::from_le_bytes([s[20], s[21], s[22], s[23]]);
+    if buffer_ref == 0 || entry_count == 0 {
         debug!(
-            "SRVSVC: response too short for {} entries: {} bytes (need {})",
-            actual,
-            s.len(),
-            ARR_OFF + 4 + actual * 12
+            "SRVSVC: buffer_ref=0x{:08x} entry_count={}",
+            buffer_ref, entry_count
         );
         return Vec::new();
     }
 
-    // Skip max_count(4), then N * SHARE_INFO_1{ name_ptr(4)+type(4)+remark_ptr(4) }
-    let entries_start = ARR_OFF + 4;
+    // Max count at s[24..28], entries start at s[28..]
+    let max_count = u32::from_le_bytes([s[24], s[25], s[26], s[27]]) as usize;
+    let actual = max_count.min(entry_count);
+
+    const ARR_OFF: usize = 28;
+    if s.len() < ARR_OFF + actual * 12 {
+        debug!(
+            "SRVSVC: response too short for {} entries: {} bytes (need {})",
+            actual,
+            s.len(),
+            ARR_OFF + actual * 12
+        );
+        return Vec::new();
+    }
+
+    // Each SHARE_INFO_1: name_ref(4) + type(4) + remark_ref(4) = 12 bytes
     let mut ptrs: Vec<(u32, u32)> = Vec::with_capacity(actual);
     for i in 0..actual {
-        let off = entries_start + i * 12;
-        let name_ptr = u32::from_le_bytes([s[off], s[off + 1], s[off + 2], s[off + 3]]);
-        let remark_ptr = u32::from_le_bytes([s[off + 8], s[off + 9], s[off + 10], s[off + 11]]);
-        ptrs.push((name_ptr, remark_ptr));
+        let off = ARR_OFF + i * 12;
+        let name_ref = u32::from_le_bytes([s[off], s[off + 1], s[off + 2], s[off + 3]]);
+        let remark_ref = u32::from_le_bytes([s[off + 8], s[off + 9], s[off + 10], s[off + 11]]);
+        ptrs.push((name_ref, remark_ref));
     }
 
     // Walk deferred strings: name then remark for each entry
-    let mut pos = entries_start + actual * 12;
+    let mut pos = ARR_OFF + actual * 12;
     let mut names = Vec::new();
-    for (name_ptr, remark_ptr) in &ptrs {
-        if *name_ptr != 0
+    for (name_ref, remark_ref) in &ptrs {
+        if *name_ref != 0
             && let Some((name, new_pos)) = read_ndr_wide_string(s, pos)
         {
             pos = new_pos;
             names.push(name);
         }
-        if *remark_ptr != 0
+        if *remark_ref != 0
             && let Some((_, new_pos)) = read_ndr_wide_string(s, pos)
         {
             pos = new_pos;
@@ -3217,23 +3214,23 @@ mod tests {
 
     #[test]
     fn test_parse_srvsvc_share_names_wrong_level() {
-        // return_code != 0 means error, parser still works but logs warning.
-        // Build response with return_code=0 but container_ptr=0 (no data).
-        let mut resp = vec![0u8; 52];
+        // Build response with level=0 — parser should reject.
+        let mut resp = vec![0u8; 60];
+        // HDR=20, stub starts at resp[20]
         resp[20..24].copy_from_slice(&0u32.to_le_bytes()); // return_code=0
-        resp[24..28].copy_from_slice(&0u32.to_le_bytes()); // container_ptr=0
+        resp[24..28].copy_from_slice(&1u32.to_le_bytes()); // InfoStruct referent=1
+        resp[28..32].copy_from_slice(&0u32.to_le_bytes()); // level=0 ← wrong
         assert!(parse_srvsvc_share_names(&resp).is_empty());
     }
 
     #[test]
     fn test_parse_srvsvc_share_names_full() {
-        // DCE/RPC response header = 20 bytes, then NDR stub.
         let hdr = 20usize;
-        // Build a realistic SRVSVC response with 2 shares.
-        // ndr_conformant_string includes referent_id prefix (4 bytes).
-        // read_ndr_wide_string expects format WITHOUT referent_id:
-        //   [max_count(4)+offset(4)+actual_count(4)+data]
-        // So we skip the first 4 bytes (referent_id) for deferred string data.
+        // Build a realistic SRVSVC response with 2 shares matching the NDR encoding:
+        //   return_code(4) + InfoStruct.referent(4) + level(4) + Info1.referent(4)
+        //   + entries_read(4) + Buffer.referent(4) + max_count(4)
+        //   + N * SHARE_INFO_1{ name_ref(4)+type(4)+remark_ref(4) }
+        //   + deferred strings
         let share1_raw = ndr_conformant_string("ADMIN$");
         let share2_raw = ndr_conformant_string("C$");
         let remark_raw = ndr_conformant_string("");
@@ -3245,24 +3242,26 @@ mod tests {
         let entry_count = 2u32;
 
         let mut buf = Vec::new();
-        // NDR stub for NetShareEnumAll response:
+        // NDR stub:
         buf.extend_from_slice(&0u32.to_le_bytes()); // return_code (NERR_Success)
-        buf.extend_from_slice(&0x00020004u32.to_le_bytes()); // container_ptr (NDR unique)
+        buf.extend_from_slice(&1u32.to_le_bytes()); // InfoStruct.referent
+        buf.extend_from_slice(&1u32.to_le_bytes()); // level = 1
+        buf.extend_from_slice(&0x00020000u32.to_le_bytes()); // Info1.referent
         buf.extend_from_slice(&entry_count.to_le_bytes()); // entries_read
-        buf.extend_from_slice(&0x00020008u32.to_le_bytes()); // buffer_ptr (NDR unique)
+        buf.extend_from_slice(&0x00020004u32.to_le_bytes()); // Buffer.referent
         buf.extend_from_slice(&entry_count.to_le_bytes()); // max_count
 
-        // Entry 0: SHARE_INFO_1{ name_ptr, type, remark_ptr }
-        buf.extend_from_slice(&0x0002000Cu32.to_le_bytes()); // name_ptr (non-null)
-        buf.extend_from_slice(&0u32.to_le_bytes()); // type
-        buf.extend_from_slice(&0x00020010u32.to_le_bytes()); // remark_ptr (non-null)
+        // Entry 0: SHARE_INFO_1{ name_ref, type, remark_ref }
+        buf.extend_from_slice(&0x00020008u32.to_le_bytes()); // name_ref
+        buf.extend_from_slice(&0u32.to_le_bytes()); // type = STYPE_DISKTREE
+        buf.extend_from_slice(&0x0002000cu32.to_le_bytes()); // remark_ref
 
         // Entry 1
-        buf.extend_from_slice(&0x00020014u32.to_le_bytes()); // name_ptr
+        buf.extend_from_slice(&0x00020010u32.to_le_bytes()); // name_ref
         buf.extend_from_slice(&0u32.to_le_bytes()); // type
-        buf.extend_from_slice(&0x00020018u32.to_le_bytes()); // remark_ptr
+        buf.extend_from_slice(&0x00020014u32.to_le_bytes()); // remark_ref
 
-        // Deferred strings (no referent_id prefix)
+        // Deferred strings
         buf.extend_from_slice(share1_ndr); // "ADMIN$"
         buf.extend_from_slice(remark_ndr); // ""
         buf.extend_from_slice(share2_ndr); // "C$"
