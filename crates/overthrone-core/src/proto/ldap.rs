@@ -1870,14 +1870,16 @@ impl LdapSession {
                     "LDAP bind successful ({}). Base DN: {base_dn}",
                     BindType::Authenticated
                 );
-                Ok(LdapSession {
+                let mut session = LdapSession {
                     ldap: Some(ldap),
                     raw: None,
                     base_dn,
                     domain: domain.to_string(),
                     dc_ip: dc_ip.to_string(),
                     bind_type: BindType::Authenticated,
-                })
+                };
+                session.refresh_base_dn_from_rootdse().await;
+                Ok(session)
             }
             Ok(res) => {
                 let rc = res.rc;
@@ -1951,14 +1953,16 @@ impl LdapSession {
 
         let base_dn = domain_to_base_dn(domain);
         info!("SASL NTLM bind successful. Base DN: {base_dn}");
-        Ok(LdapSession {
+        let mut session = LdapSession {
             ldap: None,
             raw: Some(Box::new(raw)),
             base_dn,
             domain: domain.to_string(),
             dc_ip: dc_ip.to_string(),
             bind_type: BindType::Authenticated,
-        })
+        };
+        session.refresh_base_dn_from_rootdse().await;
+        Ok(session)
     }
 
     /// Connect to the Global Catalog (port 3268/3269).
@@ -2224,14 +2228,61 @@ impl LdapSession {
 
         let base_dn = domain_to_base_dn(domain);
         info!("Raw LDAP NTLM bind successful. Base DN: {base_dn}");
-        Ok(LdapSession {
+        let mut session = LdapSession {
             ldap: None,
             raw: Some(Box::new(raw)),
             base_dn,
             domain: domain.to_string(),
             dc_ip: dc_ip.to_string(),
             bind_type: BindType::Authenticated,
-        })
+        };
+        session.refresh_base_dn_from_rootdse().await;
+        Ok(session)
+    }
+
+    /// Query the RootDSE via the existing authenticated session to discover
+    /// the real defaultNamingContext. Call this after bind when the domain
+    /// name might be a short form (e.g. "LAINOSCP" vs "LAINOSCP.local").
+    async fn refresh_base_dn_from_rootdse(&mut self) {
+        // RootDSE is a single object at base ""; search it directly without paging.
+        let entries = if let Some(ldap) = self.ldap.as_mut() {
+            use ldap3::Scope;
+            match ldap
+                .search("", Scope::Base, "(objectClass=*)", vec!["defaultNamingContext".to_string()])
+                .await
+            {
+                Ok(rs) => match rs.success() {
+                    Ok((results, _)) => results.into_iter().map(SearchEntry::construct).collect(),
+                    Err(e) => {
+                        warn!("RootDSE probe via authenticated session failed: {e}");
+                        return;
+                    }
+                },
+                Err(e) => {
+                    warn!("RootDSE probe via authenticated session failed: {e}");
+                    return;
+                }
+            }
+        } else if let Some(raw) = self.raw.as_mut() {
+            match raw.search("", "(objectClass=*)", &["defaultNamingContext"]).await {
+                Ok(e) => e,
+                Err(e) => {
+                    warn!("RootDSE probe via authenticated session failed: {e}");
+                    return;
+                }
+            }
+        } else {
+            return;
+        };
+        if let Some(entry) = entries.first()
+            && let Some(vals) = entry.attrs.get("defaultNamingContext")
+            && let Some(real_base) = vals.first()
+            && !real_base.is_empty()
+            && real_base != &self.base_dn
+        {
+            info!("RootDSE base DN correction: {} -> {}", self.base_dn, real_base);
+            self.base_dn = real_base.clone();
+        }
     }
 
     /// Unbind and close the LDAP session
@@ -2766,18 +2817,26 @@ impl LdapSession {
         const PAGE_SIZE: i32 = 1000;
         let mut all_entries = Vec::new();
         let mut cookie: Vec<u8> = Vec::new();
+        let mut use_paging = true;
 
         loop {
-            let ctrl = build_paged_results_control(PAGE_SIZE, &cookie);
-
-            let search_result = ldap
-                .with_controls(vec![ctrl])
-                .search(base, Scope::Subtree, filter, attrs)
-                .await
-                .map_err(|e| OverthroneError::Ldap {
-                    target: base.to_string(),
-                    reason: format!("Search failed: {e}"),
-                })?;
+            let search_result = if use_paging {
+                let ctrl = build_paged_results_control(PAGE_SIZE, &cookie);
+                ldap.with_controls(vec![ctrl])
+                    .search(base, Scope::Subtree, filter, attrs)
+                    .await
+                    .map_err(|e| OverthroneError::Ldap {
+                        target: base.to_string(),
+                        reason: format!("Search failed: {e}"),
+                    })?
+            } else {
+                ldap.search(base, Scope::Subtree, filter, attrs)
+                    .await
+                    .map_err(|e| OverthroneError::Ldap {
+                        target: base.to_string(),
+                        reason: format!("Search failed: {e}"),
+                    })?
+            };
 
             let (rs, res) = match search_result.success() {
                 Ok(result) => result,
@@ -2786,13 +2845,16 @@ impl LdapSession {
                         result: ref ldap_res,
                     } = ldap_err
                     {
+                        if ldap_res.rc == 10 && all_entries.is_empty() && use_paging {
+                            warn!("LDAP referral on first page with paging -- retrying without paging control");
+                            use_paging = false;
+                            continue;
+                        }
                         if ldap_res.rc == 10 {
-                            // Referral -- return what we have
                             warn!("LDAP referral (rc=10), returning partial results");
                             break;
                         }
                         if ldap_res.rc == 4 {
-                            // sizeLimitExceeded -- partial results OK
                             warn!("LDAP size limit exceeded, returning partial results");
                             break;
                         }

@@ -37,7 +37,7 @@ pub enum LdapAction {
         ldaps: bool,
         /// Verbose: show each attribute on its own line
         #[arg(long)]
-        verbose: bool,
+        detailed: bool,
     },
     /// Whoami: report the current LDAP binding state
     Whoami {
@@ -175,7 +175,7 @@ pub async fn cmd_ldap(cli: &crate::Cli, action: LdapAction) -> i32 {
             filter,
             attrs,
             ldaps,
-            verbose,
+            detailed,
         } => {
             let mut session = match connect(&target, creds.as_ref(), ldaps).await {
                 Ok(s) => s,
@@ -215,7 +215,7 @@ pub async fn cmd_ldap(cli: &crate::Cli, action: LdapAction) -> i32 {
                     }
                     for entry in &entries {
                         println!("{}", entry.dn.bright_white().bold());
-                        if verbose {
+                        if detailed {
                             for (attr, values) in &entry.attrs {
                                 for val in values {
                                     println!("  {}: {}", attr.dimmed(), val);
@@ -410,7 +410,7 @@ mod tests {
             filter: "(objectClass=*)".into(),
             attrs: None,
             ldaps: false,
-            verbose: false,
+            detailed: false,
         };
         let s = format!("{action:?}");
         assert!(s.contains("Search"));
