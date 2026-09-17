@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.4.7 (2026-09-17)
+
+### SMB 3.1.1 Signing Fix (critical)
+
+- **AES-GMAC nonce correction**: the SMB 3.1.1 GMAC packet-signing nonce is now
+  built exactly as Samba and MS-SMB2 §3.1.4.1 specify -- `MessageId` (8 bytes,
+  little-endian) followed by `Flags & SMB2_HDR_FLAG_REDIRECT` (plus
+  `SMB2_HDR_FLAG_ASYNC` for SMB2_CANCEL). The previous code embedded the full
+  Flags word, including the SIGNED bit (0x08), so every signature Windows
+  computed differed from ours and our signed packets were rejected. This broke
+  `ovt exec` and every signed SMB 3.1.1 operation against Server 2019/2022/2025.
+
+### LDAP
+
+- **RootDSE base DN auto-correction**: short domain names (e.g. `-d LAINOSCP`) are
+  corrected to the real naming context via an authenticated RootDSE probe.
+- **Paged-search referral fallback**: a paged search that returns `rc=10` now
+  retries without the paging control instead of failing.
+- **`ovt ldap search --detailed`**: renamed from `--verbose` to avoid colliding
+  with the global `-v` flag.
+
+### New
+
+- **`ovt nxc`**: NetExec-style multi-protocol host triage (smb/ldap/winrm/rpc).
+
 ## v0.4.6 (2026-09-10)
 
 ### SMB2 Protocol Compliance (WS2019/2022/2025)

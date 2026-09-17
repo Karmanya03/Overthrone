@@ -2248,7 +2248,12 @@ impl LdapSession {
         let entries = if let Some(ldap) = self.ldap.as_mut() {
             use ldap3::Scope;
             match ldap
-                .search("", Scope::Base, "(objectClass=*)", vec!["defaultNamingContext".to_string()])
+                .search(
+                    "",
+                    Scope::Base,
+                    "(objectClass=*)",
+                    vec!["defaultNamingContext".to_string()],
+                )
                 .await
             {
                 Ok(rs) => match rs.success() {
@@ -2264,7 +2269,10 @@ impl LdapSession {
                 }
             }
         } else if let Some(raw) = self.raw.as_mut() {
-            match raw.search("", "(objectClass=*)", &["defaultNamingContext"]).await {
+            match raw
+                .search("", "(objectClass=*)", &["defaultNamingContext"])
+                .await
+            {
                 Ok(e) => e,
                 Err(e) => {
                     warn!("RootDSE probe via authenticated session failed: {e}");
@@ -2280,7 +2288,10 @@ impl LdapSession {
             && !real_base.is_empty()
             && real_base != &self.base_dn
         {
-            info!("RootDSE base DN correction: {} -> {}", self.base_dn, real_base);
+            info!(
+                "RootDSE base DN correction: {} -> {}",
+                self.base_dn, real_base
+            );
             self.base_dn = real_base.clone();
         }
     }
@@ -2846,7 +2857,9 @@ impl LdapSession {
                     } = ldap_err
                     {
                         if ldap_res.rc == 10 && all_entries.is_empty() && use_paging {
-                            warn!("LDAP referral on first page with paging -- retrying without paging control");
+                            warn!(
+                                "LDAP referral on first page with paging -- retrying without paging control"
+                            );
                             use_paging = false;
                             continue;
                         }

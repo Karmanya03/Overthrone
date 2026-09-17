@@ -132,9 +132,7 @@ fn derive_signing_key(session_key: &[u8], dialect: u16, preauth_hash: Option<&[u
 }
 
 // SMB2 Flags
-#[allow(dead_code)] // Protocol reference constants
 const SMB2_FLAGS_SERVER_TO_REDIR: u32 = 0x0000_0001;
-#[expect(dead_code)]
 const SMB2_FLAGS_ASYNC: u32 = 0x0000_0002;
 const SMB2_FLAGS_SIGNED: u32 = 0x0000_0008;
 
@@ -624,24 +622,33 @@ impl Smb2Connection {
 
     /// Compute the AES-GMAC nonce for packet signing (MS-SMB2 §3.1.4.1.1).
     ///
-    /// The 12-byte nonce is MessageId (8 bytes, little-endian) followed by the
-    /// full 4-byte Flags field from the SMB2 header. Per the spec, the nonce
-    /// uses the raw Flags value — e.g. a signed server response has
-    /// SERVER_TO_REDIR (0x01) | SIGNED (0x08) = 0x09, not just 0x01.
+    /// The 12-byte nonce is MessageId (8 bytes, little-endian) followed by a
+    /// 4-byte `high_bits` value. Critically, `high_bits` is **not** the raw
+    /// Flags field: per Samba's `smb2_signing_calc_signature()` (and the spec),
+    /// it is only `Flags & SMB2_HDR_FLAG_REDIRECT` (0x00000001), OR'd with
+    /// `SMB2_HDR_FLAG_ASYNC` (0x00000002) when the opcode is SMB2_CANCEL.
     ///
-    /// A previous implementation masked flags to `SERVER_TO_REDIR` only, which
-    /// broke GMAC verification against Windows servers that set the SIGNED bit
-    /// (0x08) in their responses — a common configuration for SMB 3.1.1 with
-    /// AES-128-GCM.
+    /// Including the SIGNED bit (0x08) makes the nonce (and therefore the
+    /// tag) differ from the one Windows computes, so every GMAC signature is
+    /// rejected — which is exactly what a signed server response with
+    /// Flags = SERVER_TO_REDIR | SIGNED previously produced here.
     fn gmac_nonce(pkt: &[u8]) -> [u8; 12] {
         let msg_id = u64::from_le_bytes([
             pkt[24], pkt[25], pkt[26], pkt[27], pkt[28], pkt[29], pkt[30], pkt[31],
         ]);
+        let command = u16::from_le_bytes([pkt[12], pkt[13]]);
         let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
+
+        // Samba masks to the REDIRECT bit and additionally sets ASYNC for
+        // CANCEL requests; the SIGNED bit is never part of the nonce.
+        let mut high_bits = flags & SMB2_FLAGS_SERVER_TO_REDIR;
+        if command == SMB2_CANCEL {
+            high_bits |= SMB2_FLAGS_ASYNC;
+        }
 
         let mut nonce = [0u8; 12];
         nonce[..8].copy_from_slice(&msg_id.to_le_bytes());
-        nonce[8..].copy_from_slice(&flags.to_le_bytes());
+        nonce[8..].copy_from_slice(&high_bits.to_le_bytes());
         nonce
     }
 
@@ -4095,7 +4102,8 @@ mod tests {
         assert_eq!(&nonce[8..], &[0u8; 4]);
 
         // Server response: Flags = SERVER_TO_REDIR (0x01) | SIGNED (0x08) = 0x09.
-        // The nonce MUST use the full Flags field, not a masked version.
+        // Only the REDIRECT bit survives into the nonce; the SIGNED bit is not
+        // part of it (Samba smb2_signing_calc_signature).
         let hdr = synthetic_header(
             SMB2_TREE_CONNECT,
             1,
@@ -4104,10 +4112,15 @@ mod tests {
         let nonce = Smb2Connection::gmac_nonce(&hdr);
         assert_eq!(
             u32::from_le_bytes(nonce[8..].try_into().unwrap()),
-            SMB2_FLAGS_SERVER_TO_REDIR | SMB2_FLAGS_SIGNED
+            SMB2_FLAGS_SERVER_TO_REDIR
         );
 
-        // CANCEL request with ASYNC flag set in the header.
+        // A plain (non-redirect, unsigned) request contributes no high bits.
+        let hdr = synthetic_header(SMB2_TREE_CONNECT, 1, 0);
+        let nonce = Smb2Connection::gmac_nonce(&hdr);
+        assert_eq!(u32::from_le_bytes(nonce[8..].try_into().unwrap()), 0);
+
+        // CANCEL request: the ASYNC flag is added on top of the REDIRECT bit.
         let hdr = synthetic_header(
             SMB2_CANCEL,
             1,
