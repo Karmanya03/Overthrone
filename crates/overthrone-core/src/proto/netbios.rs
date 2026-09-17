@@ -297,23 +297,52 @@ pub async fn smb_negotiate(target: &str) -> Result<SmbNegotiateResult> {
         .parse()
         .map_err(|e| OverthroneError::Smb(format!("Invalid address: {e}")))?;
 
-    let mut stream = tokio::net::TcpStream::connect(addr)
-        .await
-        .map_err(|e| OverthroneError::Smb(format!("TCP connect failed: {e}")))?;
+    // Bound the connect: a filtered host otherwise blocks on the OS SYN retry
+    // timer, which makes sweeping a subnet impractical.
+    let mut stream =
+        tokio::time::timeout(Duration::from_secs(5), tokio::net::TcpStream::connect(addr))
+            .await
+            .map_err(|_| OverthroneError::Smb(format!("TCP connect to {addr} timed out")))?
+            .map_err(|e| OverthroneError::Smb(format!("TCP connect failed: {e}")))?;
 
-    // Send SMB2 Negotiate Protocol Request
+    // Send SMB2 Negotiate Protocol Request. The request is framed with the
+    // 4-byte NetBIOS Session Service header that SMB over direct TCP (port 445)
+    // requires: [type=0x00][length: u24 big-endian]. Without it the server reads
+    // `fe 53 4d 42` as the NBSS header, sees an invalid message type 0xFE and
+    // resets the connection.
     let negotiate_req = build_smb2_negotiate_request();
     tokio::time::timeout(Duration::from_secs(5), stream.write_all(&negotiate_req))
         .await
         .map_err(|_| OverthroneError::Smb("SMB send timed out".to_string()))?
         .map_err(|e| OverthroneError::Smb(format!("SMB send failed: {e}")))?;
 
-    // Read SMB header (64 bytes for SMB2)
-    let mut header = [0u8; 64];
-    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut header))
+    // Read the 4-byte NBSS frame header to learn how much SMB2 follows.
+    let mut len_buf = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut len_buf))
         .await
         .map_err(|_| OverthroneError::Smb("SMB header read timed out".to_string()))?
         .map_err(|e| OverthroneError::Smb(format!("SMB header read failed: {e}")))?;
+    let nbss_type = len_buf[0];
+    if nbss_type != 0x00 {
+        return Err(OverthroneError::Smb(format!(
+            "SMB: unexpected NetBIOS message type 0x{nbss_type:02X} (expected 0x00 session message)"
+        )));
+    }
+    let msg_len = u32::from_be_bytes([0, len_buf[1], len_buf[2], len_buf[3]]) as usize;
+    if !(64..=16 * 1024 * 1024).contains(&msg_len) {
+        return Err(OverthroneError::Smb(format!(
+            "SMB: NetBIOS frame length out of range: {msg_len} bytes"
+        )));
+    }
+    let mut raw = vec![0u8; msg_len];
+    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut raw))
+        .await
+        .map_err(|_| OverthroneError::Smb("SMB payload read timed out".to_string()))?
+        .map_err(|e| OverthroneError::Smb(format!("SMB payload read failed: {e}")))?;
+
+    // Split the SMB2 response into its 64-byte header and body.
+    let header: [u8; 64] = raw[..64].try_into().expect("NBSS frame is >=64 bytes");
+    let payload = raw[64..].to_vec();
 
     // Verify SMB2 protocol ID
     if &header[0..4] != b"\xfeSMB" {
@@ -324,13 +353,13 @@ pub async fn smb_negotiate(target: &str) -> Result<SmbNegotiateResult> {
     }
 
     // Parse SMB2 header
-    let struct_size = header[4] as usize;
+    let _struct_size = header[4] as usize;
     let _credit_charge = u16::from_le_bytes([header[5], header[6]]);
     let status = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
     let command = u16::from_le_bytes([header[12], header[13]]);
     let _credit_resp = u16::from_le_bytes([header[14], header[15]]);
     let _flags = u32::from_le_bytes([header[16], header[17], header[18], header[19]]);
-    let next_command = u32::from_le_bytes([header[20], header[21], header[22], header[23]]);
+    let _next_command = u32::from_le_bytes([header[20], header[21], header[22], header[23]]);
     let _message_id = u64::from_le_bytes([
         header[24], header[25], header[26], header[27], header[28], header[29], header[30],
         header[31],
@@ -343,20 +372,7 @@ pub async fn smb_negotiate(target: &str) -> Result<SmbNegotiateResult> {
     ]);
     let _signature = &header[48..64];
 
-    // Read the rest of the response
-    let payload_len = if next_command > 0 {
-        next_command as usize
-    } else {
-        struct_size
-    };
-
-    let mut payload = vec![0u8; payload_len - 64];
-    tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut payload))
-        .await
-        .map_err(|_| OverthroneError::Smb("SMB payload read timed out".to_string()))?
-        .map_err(|e| OverthroneError::Smb(format!("SMB payload read failed: {e}")))?;
-
-    let full_response = [header.to_vec(), payload.clone()].concat();
+    let full_response = raw;
 
     // Parse negotiate response
     let mut result = SmbNegotiateResult {
@@ -430,40 +446,87 @@ pub async fn smb_negotiate(target: &str) -> Result<SmbNegotiateResult> {
     Ok(result)
 }
 
-/// Build SMB2 Negotiate Protocol Request.
-fn build_smb2_negotiate_request() -> Vec<u8> {
-    let mut pkt = Vec::new();
+/// Dialects advertised by [`build_smb2_negotiate_request`], lowest to highest.
+const SMB2_NEGOTIATE_DIALECTS: [u16; 5] = [0x0202, 0x0210, 0x0300, 0x0302, 0x0311];
 
-    // SMB2 Header
+/// Build a NetBIOS-framed SMB2 Negotiate Protocol Request.
+///
+/// Direct TCP SMB (port 445) requires the 4-byte NetBIOS Session Service header
+/// `[type=0x00][length: u24 big-endian]`. The request offers all five SMB2/3
+/// dialects and -- because SMB 3.1.1 mandates them -- advertises the Pre-Auth
+/// Integrity and Encryption capability negotiate contexts, mirroring what
+/// Windows and Impacket send.
+fn build_smb2_negotiate_request() -> Vec<u8> {
+    let mut pkt = Vec::with_capacity(256);
+
+    // ---- SMB2 header (64 bytes) ----
     pkt.extend_from_slice(b"\xfeSMB"); // Protocol ID
     pkt.extend_from_slice(&[0x40, 0x00]); // Structure size (64)
     pkt.extend_from_slice(&[0x00, 0x00]); // Credit charge
-    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Channel sequence
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Status / ChannelSequence
+    pkt.extend_from_slice(&[0x00, 0x00]); // Command = SMB2 NEGOTIATE (0)
+    pkt.extend_from_slice(&[0x01, 0x00]); // Credit request
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Flags
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Next command
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // Message ID
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Reserved
     pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Tree ID
-    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // Session ID
-    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]); // Signature
+    pkt.extend_from_slice(&[0x00; 8]); // Session ID
+    pkt.extend_from_slice(&[0x00; 16]); // Signature
 
-    // SMB2 Negotiate Request
+    // ---- Negotiate request body ----
+    let dialect_count = SMB2_NEGOTIATE_DIALECTS.len() as u16;
     pkt.extend_from_slice(&[0x24, 0x00]); // Structure size (36)
-    pkt.extend_from_slice(&[0x01, 0x00]); // Dialect count
-    pkt.extend_from_slice(&[0x00, 0x00]); // Security mode
+    pkt.extend_from_slice(&dialect_count.to_le_bytes()); // Dialect count
+    pkt.extend_from_slice(&[0x01, 0x00]); // Security mode = signing enabled
     pkt.extend_from_slice(&[0x00, 0x00]); // Reserved
-    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Capabilities
+    pkt.extend_from_slice(&[0x40, 0x00, 0x00, 0x00]); // Capabilities = encryption
     // Client GUID (16 bytes)
     pkt.extend_from_slice(&[
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
         0x10,
     ]);
-    // Negotiate context offset
-    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
-    // Dialect: SMB 3.1.1
-    pkt.extend_from_slice(&[0x11, 0x03]);
 
-    pkt
+    // Dialects + padding to the first 8-byte boundary for negotiate contexts.
+    let body_prefix = 36 + dialect_count as usize * 2;
+    let padding = (8 - body_prefix % 8) % 8;
+    let context_offset = (64 + body_prefix + padding) as u32;
+    pkt.extend_from_slice(&context_offset.to_le_bytes()); // Negotiate context offset
+    pkt.extend_from_slice(&2u16.to_le_bytes()); // Negotiate context count
+    pkt.extend_from_slice(&[0x00, 0x00]); // Reserved2
+    for d in SMB2_NEGOTIATE_DIALECTS {
+        pkt.extend_from_slice(&d.to_le_bytes());
+    }
+    pkt.extend(std::iter::repeat_n(0u8, padding));
+
+    // Pre-Auth Integrity Capabilities (SHA-512). Mandatory when 3.1.1 is offered.
+    pkt.extend_from_slice(&1u16.to_le_bytes()); // Context type
+    pkt.extend_from_slice(&38u16.to_le_bytes()); // Data length
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Reserved
+    pkt.extend_from_slice(&1u16.to_le_bytes()); // Hash algorithm count
+    pkt.extend_from_slice(&32u16.to_le_bytes()); // Salt length
+    pkt.extend_from_slice(&1u16.to_le_bytes()); // SHA-512
+    pkt.extend_from_slice(&[0x11u8; 32]); // Salt
+    // ContextType(2) + DataLength(2) + Reserved(4) + HashAlgCount(2) + SaltLength(2)
+    // + HashAlgorithm(2) + Salt(32) = 46 bytes, padded to the next 8-byte boundary.
+    let preauth_len = 2 + 2 + 4 + 2 + 2 + 2 + 32;
+    pkt.extend(std::iter::repeat_n(0u8, (8 - preauth_len % 8) % 8));
+
+    // Encryption Capabilities (AES-128-GCM preferred, then AES-128-CCM).
+    pkt.extend_from_slice(&2u16.to_le_bytes()); // Context type
+    pkt.extend_from_slice(&6u16.to_le_bytes()); // Data length
+    pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Reserved
+    pkt.extend_from_slice(&2u16.to_le_bytes()); // Cipher count
+    pkt.extend_from_slice(&0x0002u16.to_le_bytes()); // AES-128-GCM
+    pkt.extend_from_slice(&0x0001u16.to_le_bytes()); // AES-128-CCM
+
+    // ---- NetBIOS Session Service framing ----
+    let mut framed = Vec::with_capacity(4 + pkt.len());
+    let len = pkt.len() as u32;
+    framed.push(0x00); // Session message
+    framed.extend_from_slice(&len.to_be_bytes()[1..]); // u24 big-endian length
+    framed.extend_from_slice(&pkt);
+    framed
 }
 
 // ===========================================================
@@ -540,11 +603,64 @@ mod tests {
     }
 
     #[test]
-    fn test_smb2_negotiate_structure() {
+    fn test_smb2_negotiate_nbss_frame() {
         let req = build_smb2_negotiate_request();
-        assert_eq!(&req[0..4], b"\xfeSMB"); // SMB2 protocol ID
-        assert_eq!(req[4], 0x40); // Structure size
-        assert_eq!(req[84], 0x11); // Dialect SMB 3.1.1
-        assert_eq!(req[85], 0x03);
+        // NetBIOS Session Service header: type 0x00 + u24 BE length.
+        assert_eq!(req[0], 0x00, "NBSS message type must be a session message");
+        let declared = u32::from_be_bytes([0, req[1], req[2], req[3]]) as usize;
+        assert_eq!(
+            declared,
+            req.len() - 4,
+            "NBSS length must cover the SMB2 PDU"
+        );
+        assert_eq!(
+            &req[4..8],
+            b"\xfeSMB",
+            "SMB2 protocol ID follows the NBSS frame"
+        );
+        assert_eq!(req[8], 0x40, "SMB2 header StructureSize is 64");
+    }
+
+    #[test]
+    fn test_smb2_negotiate_dialects_and_contexts() {
+        let req = build_smb2_negotiate_request();
+        // Negotiate body starts after the 4-byte NBSS + 64-byte SMB2 header.
+        let body = 4 + 64;
+        assert_eq!(req[body], 36, "negotiate StructureSize is 36");
+        assert_eq!(req[body + 2], 5, "five dialects are advertised");
+
+        // Dialects sit at body offset 36, and 3.1.1 is last.
+        let dialects = body + 36;
+        assert_eq!(&req[dialects..dialects + 2], &[0x02, 0x02]);
+        assert_eq!(&req[dialects + 8..dialects + 10], &[0x11, 0x03]);
+
+        // Two negotiate contexts (pre-auth integrity + encryption) are declared
+        // and the offset points just past the dialects + 8-byte padding.
+        let ctx_count = u16::from_le_bytes([req[body + 32], req[body + 33]]);
+        assert_eq!(ctx_count, 2);
+        let ctx_off = u32::from_le_bytes([
+            req[body + 28],
+            req[body + 29],
+            req[body + 30],
+            req[body + 31],
+        ]);
+        let preauth = 4 + ctx_off as usize;
+        assert_eq!(ctx_off, 112);
+        assert_eq!(u16::from_le_bytes([req[preauth], req[preauth + 1]]), 1);
+        assert_eq!(u16::from_le_bytes([req[preauth + 2], req[preauth + 3]]), 38);
+    }
+
+    #[test]
+    fn test_smb2_negotiate_encryption_context() {
+        let req = build_smb2_negotiate_request();
+        // Pre-auth context is 46 bytes from pkt offset 116, padded to 48, so the
+        // encryption context starts at pkt offset 164.
+        let enc = 164;
+        assert_eq!(u16::from_le_bytes([req[enc], req[enc + 1]]), 2);
+        assert_eq!(u16::from_le_bytes([req[enc + 2], req[enc + 3]]), 6);
+        // Cipher count = 2, GCM then CCM.
+        assert_eq!(u16::from_le_bytes([req[enc + 8], req[enc + 9]]), 2);
+        assert_eq!(u16::from_le_bytes([req[enc + 10], req[enc + 11]]), 0x0002);
+        assert_eq!(u16::from_le_bytes([req[enc + 12], req[enc + 13]]), 0x0001);
     }
 }

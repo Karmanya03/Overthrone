@@ -1468,6 +1468,28 @@ impl SmbSession {
         Ok(names)
     }
 
+    /// Query the remote OS release via SRVSVC `NetrServerGetInfo` (opnum 21).
+    ///
+    /// This is the same measurement `smbclient -L` and NetExec use to build
+    /// their OS string: `sv101_version_minor` is the Windows **build** number.
+    /// Prefer it over the SMB negotiate "native OS" text, which is
+    /// server-supplied and partly attacker-controllable.
+    pub async fn get_server_info(&self) -> Result<crate::proto::epm::SrvsvcServerInfo> {
+        crate::proto::epm::net_server_get_info(self, "").await
+    }
+
+    /// `"Windows Server 2022 (10.0.20348)"`-style label.
+    ///
+    /// Returns `None` when the target refuses SRVSVC on this session (hardened
+    /// DCs commonly restrict it for null sessions) -- callers should treat that
+    /// as "unknown", never as "patched".
+    pub async fn get_os_label(&self) -> Option<String> {
+        self.get_server_info()
+            .await
+            .ok()
+            .map(|info| format!("{} ({})", info.release_name(), info.version_string()))
+    }
+
     /// List all shares and return access results for each one.
     pub async fn enumerate_accessible_shares(&self) -> Vec<ShareAccessResult> {
         let all_shares = match self.list_shares().await {
@@ -1852,6 +1874,109 @@ pub fn parse_samr_enumerate_users(resp: &[u8]) -> (Vec<(u32, String, u32)>, [u8;
         off += padding;
 
         results.push((rid, name, 1)); // type=1 (user) by default
+    }
+
+    // Resume handle at end of stub
+    let rh_off = entries_start + entry_count * 12;
+    if rh_off + 4 <= resp.len() {
+        resume_handle.copy_from_slice(&resp[rh_off..rh_off + 4]);
+        done = u32::from_le_bytes(resume_handle) == 0;
+    }
+
+    (results, resume_handle, done)
+}
+
+/// Build SAMR EnumerateGroupsInDomain request (opnum 12).
+pub fn build_samr_enumerate_groups(
+    domain_handle: &[u8],
+    resume_handle: &[u8; 4],
+    max_size: u32,
+) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(domain_handle);
+    stub.extend_from_slice(resume_handle);
+    stub.extend_from_slice(&max_size.to_le_bytes());
+    build_rpc_request(12, &stub)
+}
+
+/// SAMR group enumeration result: (groups, resume_handle, done).
+pub type SamrGroupEnumResult = (Vec<(u32, String, String, u32)>, [u8; 4], bool);
+
+/// Parse group entries from SAMR EnumerateGroupsInDomain response.
+/// Returns Vec of (rid, name, description, member_count), the resume handle, and whether enumeration is done.
+pub fn parse_samr_enumerate_groups(resp: &[u8]) -> SamrGroupEnumResult {
+    let mut results = Vec::new();
+    let mut resume_handle = [0u8; 4];
+    let mut done = true;
+
+    if resp.len() < 36 {
+        return (results, resume_handle, done);
+    }
+
+    let stub_start = 24;
+    let status = u32::from_le_bytes([
+        resp[stub_start],
+        resp[stub_start + 1],
+        resp[stub_start + 2],
+        resp[stub_start + 3],
+    ]);
+    if status != 0 {
+        return (results, resume_handle, done);
+    }
+
+    let entry_count = u32::from_le_bytes([
+        resp[stub_start + 4],
+        resp[stub_start + 5],
+        resp[stub_start + 6],
+        resp[stub_start + 7],
+    ]) as usize;
+
+    if entry_count == 0 || entry_count > 10000 {
+        return (results, resume_handle, done);
+    }
+
+    // Parse RIDs from entry headers
+    let entries_start = stub_start + 12;
+    let mut rids = Vec::with_capacity(entry_count);
+    for i in 0..entry_count {
+        let off = entries_start + i * 12;
+        if off + 4 > resp.len() {
+            break;
+        }
+        rids.push(u32::from_le_bytes([
+            resp[off],
+            resp[off + 1],
+            resp[off + 2],
+            resp[off + 3],
+        ]));
+    }
+
+    // Parse names from the string buffer area
+    let mut off = entries_start + entry_count * 12;
+    for &rid in &rids {
+        if off + 8 > resp.len() {
+            break;
+        }
+        let actual_len = u16::from_le_bytes([resp[off + 2], resp[off + 3]]) as usize;
+        off += 8;
+
+        let name = if actual_len > 0 && off + actual_len * 2 <= resp.len() {
+            let name_bytes = &resp[off..off + actual_len * 2];
+            String::from_utf16_lossy(
+                &name_bytes
+                    .chunks_exact(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            String::new()
+        };
+        off += actual_len * 2;
+        let padding = (4 - (actual_len * 2) % 4) % 4;
+        off += padding;
+
+        // Description comes after name, but we'll use a simplified approach
+        results.push((rid, name, String::new(), 0));
     }
 
     // Resume handle at end of stub
@@ -2574,6 +2699,28 @@ impl SmbSession {
             names.join(", ")
         );
         Ok(names)
+    }
+
+    /// Query the remote OS release via SRVSVC `NetrServerGetInfo` (opnum 21).
+    ///
+    /// This is the same measurement `smbclient -L` and NetExec use to build
+    /// their OS string: `sv101_version_minor` is the Windows **build** number.
+    /// Prefer it over the SMB negotiate "native OS" text, which is
+    /// server-supplied and partly attacker-controllable.
+    pub async fn get_server_info(&self) -> Result<crate::proto::epm::SrvsvcServerInfo> {
+        crate::proto::epm::net_server_get_info(self, "").await
+    }
+
+    /// `"Windows Server 2022 (10.0.20348)"`-style label.
+    ///
+    /// Returns `None` when the target refuses SRVSVC on this session (hardened
+    /// DCs commonly restrict it for null sessions) -- callers should treat that
+    /// as "unknown", never as "patched".
+    pub async fn get_os_label(&self) -> Option<String> {
+        self.get_server_info()
+            .await
+            .ok()
+            .map(|info| format!("{} ({})", info.release_name(), info.version_string()))
     }
 
     /// List all shares and return access results for each one.

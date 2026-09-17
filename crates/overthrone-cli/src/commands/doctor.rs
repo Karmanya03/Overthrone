@@ -657,51 +657,36 @@ async fn check_ldap_channel_binding(dc_ip: &str) -> CheckResult {
         .map(|exts| exts.iter().any(|e| e.contains("1.2.840.113556.1.4.1791")))
         .unwrap_or(false);
 
-    // Determine channel binding enforcement level
-    // Functionality levels: 0=2000, 1=2003, 2=2008, 3=2008R2, 4=2012, 5=2012R2, 6=2016, 7=2025
-    let cb_status = if dc_functionality >= 7 {
-        // WS 2025: defaults to "Required" for channel binding
-        "Required"
+    // LDAP channel binding is governed by the `LdapEnforceChannelBinding`
+    // policy (Never / When supported / Required). Server 2016+ defaults to
+    // "When supported" and Windows Server 2025 ships "Required". Because
+    // Server 2016/2019/2022/2025 all report functional level 7, the level
+    // alone cannot prove enforcement -- so report the platform generation and
+    // the default that applies to it rather than asserting "Required".
+    let (cb_status, cb_scope) = if dc_functionality >= 7 {
+        (
+            "Negotiate",
+            "Server 2016+ default; Server 2025 sets Required via policy",
+        )
     } else if dc_functionality >= 6 {
-        // WS 2016/2019/2022: defaults to "When supported" (Negotiate)
-        "Negotiate"
+        ("Negotiate", "Server 2016+ default")
     } else {
-        // Older: typically "Never" or "When supported"
-        "Negotiate (likely)"
+        ("Negotiate (likely)", "older platform default")
     };
 
-    let os_label = match dc_functionality {
-        0 => "Windows 2000",
-        1 => "Windows 2003",
-        2 => "Windows 2008",
-        3 => "Windows 2008 R2",
-        4 => "Windows 2012",
-        5 => "Windows 2012 R2",
-        6 => "Windows 2016/2019/2022",
-        7 => "Windows Server 2025",
-        _ => "Unknown",
-    };
+    let os_label = overthrone_core::proto::ldap::domain_functionality_release(dc_functionality);
 
-    if cb_status == "Required" {
-        CheckResult {
- name: "ldap_channel_binding".to_string(),
- passed: false,
- message: format!("CB={cb_status} on {os_label} (level {dc_functionality}) -- relay to LDAPS will fail"),
- hint: Some("Channel binding is REQUIRED. NTLM relay to LDAPS is cryptographically impossible. Use pure Kerberos paths (Kerberoast, ASREPRoast, DCSync) instead.".to_string()),
- }
-    } else {
-        CheckResult {
-            name: "ldap_channel_binding".to_string(),
-            passed: true,
-            message: format!(
-                "CB={cb_status} on {os_label} (level {dc_functionality}) -- relay bypass should work"
-            ),
-            hint: if has_policy_hints {
-                Some("Server supports policy hints OID. Our relay strips MsvAvChannelBindings AV_PAIRs to bypass CBT in Negotiate mode.".to_string())
-            } else {
-                None
-            },
-        }
+    CheckResult {
+        name: "ldap_channel_binding".to_string(),
+        passed: true,
+        message: format!("CB={cb_status} on {os_label} (level {dc_functionality}) -- {cb_scope}"),
+        hint: Some(if has_policy_hints {
+            "Server supports policy hints OID; our relay strips MsvAvChannelBindings AV_PAIRs to bypass CBT in Negotiate mode.".to_string()
+        } else if dc_functionality >= 7 {
+            "Level 7 covers Server 2016-2025. On Windows Server 2025 the default is Required, making NTLM relay to LDAPS cryptographically impossible -- confirm the CA's LdapEnforceChannelBinding policy before relying on relay.".to_string()
+        } else {
+            "If NTLM relay to LDAPS fails with an extended-protection error, the CA has channel binding set to Required.".to_string()
+        }),
     }
 }
 
@@ -808,16 +793,10 @@ async fn check_ntlm_policy(dc_ip: &str) -> CheckResult {
         .iter()
         .any(|m| m.contains("ntlm") || m.contains("gss-spnego"));
 
-    let os_label = match dc_functionality {
-        7 => "Windows Server 2025",
-        6 => "Windows 2016/2019/2022",
-        5 => "Windows 2012 R2",
-        4 => "Windows 2012",
-        _ => "Older",
-    };
+    let os_label = overthrone_core::proto::ldap::domain_functionality_release(dc_functionality);
 
-    if dc_functionality >= 7 && !has_ntlm {
-        // WS 2025 without NTLM in SASL mechanisms = likely NTLM blocked
+    if !has_ntlm {
+        // No NTLM in the advertised SASL mechanisms = NTLM likely blocked
         CheckResult {
  name: "ntlm_policy".to_string(),
  passed: false,

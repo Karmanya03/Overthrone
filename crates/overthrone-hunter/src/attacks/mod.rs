@@ -8,6 +8,7 @@ pub mod ad_rce;
 pub mod adcs_uaf;
 pub mod cba_bypass;
 pub mod checksum_bypass;
+pub mod dc_version;
 pub mod ipv6_rce;
 pub mod krb_bypass;
 pub mod netcfg_ops;
@@ -18,11 +19,15 @@ pub mod wac_compromise;
 
 pub use ad_ds_eop::{AdDsEopResult, exploit_ad_ds_eop};
 pub use ad_rce::{AdRceConfig, AdRceExploitMode, AdRceResult, exploit_ad_rce};
-pub use adcs_uaf::{AdcsUafConfig, AdcsUafResult, exploit_adcs_uaf};
+pub use adcs_uaf::{AdcsUafConfig, AdcsUafResult, AdcsUafVerdict, exploit_adcs_uaf};
 pub use cba_bypass::{CbaBypassResult, assess_cba_bypass};
 pub use checksum_bypass::{
     ChecksumBypassConfig, ChecksumBypassResult, ChecksumTechnique, exploit_all_checksum_techniques,
     exploit_checksum_bypass,
+};
+pub use dc_version::{
+    BuildVerdict, DcBuildProbe, DcCreds, encode_build_ubr, probe_dc_build, verdict_for_build,
+    verdict_from_build_only,
 };
 pub use ipv6_rce::{
     Ipv6Payload, Ipv6RceConfig, Ipv6RceResult, exploit_ipv6_rce, scan_vulnerable_hosts,

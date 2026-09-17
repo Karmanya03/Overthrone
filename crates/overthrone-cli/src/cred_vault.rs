@@ -160,9 +160,10 @@ fn encrypt_payload(passphrase: &str, payload: &[u8], iterations: u32) -> Result<
     let key = derive_key(passphrase, &salt, iterations);
 
     // AES-256-CBC encrypt with PKCS7 padding
+    // `cbc`'s KeyIvInit::new key comes first, then the IV.
     let key_ga = GenericArray::from_slice(&key);
     let iv_ga = GenericArray::from_slice(&iv);
-    let encryptor = Encryptor::<Aes256>::new(iv_ga, key_ga);
+    let encryptor = Encryptor::<Aes256>::new(key_ga, iv_ga);
     let ciphertext = encryptor.encrypt_padded_vec_mut::<Pkcs7>(payload);
 
     // Encrypt-then-MAC: HMAC over (version || salt || iv || ciphertext)
@@ -205,9 +206,10 @@ fn decrypt_payload(passphrase: &str, file: &VaultFile) -> Result<Vec<u8>> {
     let _ = expected;
 
     // Decrypt
+    // `cbc`'s KeyIvInit::new key comes first, then the IV.
     let key_ga = GenericArray::from_slice(&key);
     let iv_ga = GenericArray::from_slice(&file.iv);
-    let decryptor = Decryptor::<Aes256>::new(iv_ga, key_ga);
+    let decryptor = Decryptor::<Aes256>::new(key_ga, iv_ga);
     let plaintext = decryptor
         .decrypt_padded_vec_mut::<Pkcs7>(&file.ciphertext)
         .map_err(|e| anyhow::anyhow!("decryption failed (wrong passphrase?): {e}"))?;
@@ -357,7 +359,8 @@ mod tests {
 
     #[test]
     fn test_mask_secret() {
-        assert_eq!(mask_secret("P@ssw0rd!"), "P@********!");
+        // Keep the first and last two characters, mask everything between.
+        assert_eq!(mask_secret("P@ssw0rd!"), "P@*****d!");
         assert_eq!(mask_secret("abc"), "***");
         assert_eq!(mask_secret("ab"), "**");
         assert_eq!(mask_secret("abcd"), "****");

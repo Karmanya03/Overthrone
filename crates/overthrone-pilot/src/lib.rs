@@ -14,6 +14,7 @@
 //! - `wizard`   -- Interactive wizard: stage-by-stage with user prompts
 
 pub mod adaptive;
+pub mod advisor;
 pub mod coerce_tcp;
 pub mod dc_verify;
 pub mod executor;
@@ -28,6 +29,7 @@ pub(crate) mod trail;
 pub mod wizard;
 
 // Re-exports for CLI integration
+pub use advisor::{CompletedAction, NextStep, advise};
 pub use dc_verify::{DcCheckKind, DcCheckResult, DcVerificationSummary, DcVerifyConfig, verify_dc};
 pub use goals::{AttackGoal, GoalStatus};
 pub use planner::{AttackPlan, PlanStep};

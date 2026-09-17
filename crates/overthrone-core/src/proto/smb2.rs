@@ -14,6 +14,7 @@
 
 use crate::error::{OverthroneError, Result};
 use aes::Aes128;
+use aes::cipher::{BlockEncrypt, generic_array::GenericArray};
 use cmac::Cmac;
 use hmac::{Hmac, Mac};
 use md4::{Digest as Md4Digest, Md4};
@@ -133,6 +134,8 @@ fn derive_signing_key(session_key: &[u8], dialect: u16, preauth_hash: Option<&[u
 // SMB2 Flags
 #[allow(dead_code)] // Protocol reference constants
 const SMB2_FLAGS_SERVER_TO_REDIR: u32 = 0x0000_0001;
+#[expect(dead_code)]
+const SMB2_FLAGS_ASYNC: u32 = 0x0000_0002;
 const SMB2_FLAGS_SIGNED: u32 = 0x0000_0008;
 
 // NTLMSSP
@@ -245,16 +248,72 @@ fn ntstatus_to_name(code: u32) -> &'static str {
     }
 }
 
-// SMB3 Transform_Header (MS-SMB2 §2.2.41)
+// -----------------------------------------------------------
+//  SMB3 Transform_Header (MS-SMB2 §2.2.41)
+// -----------------------------------------------------------
+//
+//   0..4   ProtocolId          0xFD 'S' 'M' 'B'
+//   4..20  Signature           16-byte AEAD tag
+//  20..36  Nonce               16-byte field (11 bytes used by CCM, 12 by GCM);
+//                              the unused tail MUST be zero and is part of the AAD
+//  36..40  OriginalMessageSize u32 LE -- plaintext length before encryption
+//  40..42  Reserved            MUST be 0
+//  42..44  Flags               SMB2_TRANSFORM_FLAG_ENCRYPTED (0x0001)
+//  44..52  SessionId           u64 LE
+//
+// The associated data for the AEAD is the Transform_Header from the Nonce
+// field to the end (bytes 20..52) -- MS-SMB2 §3.1.4.4.
 const SMB3_TRANSFORM_MAGIC: &[u8; 4] = b"\xfdSMB";
 const SMB3_TRANSFORM_HEADER_SIZE: usize = 52;
-const SMB3_ENCRYPTION_AES128_GCM: u16 = 0x0001;
-#[allow(dead_code)]
-const SMB3_ENCRYPTION_AES256_GCM: u16 = 0x0002;
-// KDF labels for SMB 3.x encryption key derivation
-const SMB3_ENCRYPTION_KEY_LABEL_C2S: &[u8] = b"SMBC2SCipherKey";
-const SMB3_ENCRYPTION_KEY_LABEL_S2C: &[u8] = b"SMBS2CCipherKey";
-const SMB3_ENCRYPTION_KEY_CONTEXT: &[u8] = b"SmbCipher";
+const SMB3_TF_SIGNATURE: usize = 4;
+const SMB3_TF_NONCE: usize = 20;
+const SMB3_TF_MSG_SIZE: usize = 36;
+const SMB3_TF_FLAGS: usize = 42;
+const SMB3_TF_SESSION_ID: usize = 44;
+const SMB3_TF_FLAG_ENCRYPTED: u16 = 0x0001;
+
+// SMB2_ENCRYPTION_CAPABILITIES cipher IDs (MS-SMB2 §2.2.3.1.2)
+const SMB2_CIPHER_AES128_CCM: u16 = 0x0001;
+const SMB2_CIPHER_AES128_GCM: u16 = 0x0002;
+
+// Nonce sizes used with the Transform_Header (MS-SMB2 §2.2.41)
+const SMB3_CCM_NONCE_SIZE: usize = 11;
+const SMB3_GCM_NONCE_SIZE: usize = 12;
+
+// KDF labels/contexts for SMB 3.0/3.0.2 encryption key derivation
+// (MS-SMB2 §3.2.4.1.3).  The strings are null-terminated and the SP800-108 KDF
+// inserts its own 0x00 separator between label and context -- the same
+// convention that makes the SMB 3.1.1 "SMBSigningKey\0" test vectors in
+// Microsoft's pre-authentication-integrity blog reproduce exactly.
+const SMB3_CCM_KEY_LABEL: &[u8] = b"SMB2AESCCM\x00";
+const SMB3_CCM_KEY_CTX_C2S: &[u8] = b"ServerOut\x00";
+// Note the trailing space: the context is the 9-byte literal "ServerIn "
+// including its NUL terminator, which is what Windows and impacket use.
+const SMB3_CCM_KEY_CTX_S2C: &[u8] = b"ServerIn \x00";
+
+/// SMB3 cipher negotiated in the SMB2_ENCRYPTION_CAPABILITIES context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Smb3Cipher {
+    Aes128Ccm,
+    Aes128Gcm,
+}
+
+impl Smb3Cipher {
+    /// Nonce (IV) length carried in the Transform_Header for this cipher.
+    fn nonce_len(self) -> usize {
+        match self {
+            Smb3Cipher::Aes128Ccm => SMB3_CCM_NONCE_SIZE,
+            Smb3Cipher::Aes128Gcm => SMB3_GCM_NONCE_SIZE,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Smb3Cipher::Aes128Ccm => "AES-128-CCM",
+            Smb3Cipher::Aes128Gcm => "AES-128-GCM",
+        }
+    }
+}
 
 // ===========================================================
 //  SMB2 Connection -- TCP Transport
@@ -289,8 +348,9 @@ pub struct Smb2Connection {
     /// Number of consecutive signing verification failures.
     /// After SIGNING_FAILURE_THRESHOLD failures, signing is disabled for the session.
     signing_failures: std::sync::atomic::AtomicU32,
-    /// Selected cipher ID from negotiate response (0x0001 = AES-128-CCM, 0x0002 = AES-128-GCM)
-    #[allow(dead_code)]
+    /// Selected cipher ID from the NEGOTIATE response (0x0001 = AES-128-CCM,
+    /// 0x0002 = AES-128-GCM). Only meaningful for SMB 3.1.1 -- earlier dialects
+    /// have no cipher negotiation and always use AES-128-CCM.
     cipher_id: AtomicU16,
 }
 
@@ -357,7 +417,8 @@ impl Smb2Connection {
             // Initialize to 64 zero bytes for SMB 3.1.1 cumulative pre-auth integrity hash
             preauth_hash: Mutex::new(Some(vec![0u8; 64])),
             signing_failures: std::sync::atomic::AtomicU32::new(0),
-            cipher_id: AtomicU16::new(0x0001),
+            // 0 = not negotiated yet; see `negotiated_cipher`.
+            cipher_id: AtomicU16::new(0),
         })
     }
 
@@ -375,7 +436,7 @@ impl Smb2Connection {
                 self.encryption_key.lock().await.clone().ok_or_else(|| {
                     OverthroneError::Smb("SMB3 encryption key not set".to_string())
                 })?;
-            smb3_encrypt_aes128_gcm(data, &enc_key, session_id)?
+            smb3_encrypt(data, &enc_key, session_id, self.negotiated_cipher())?
         } else {
             data.to_vec()
         };
@@ -437,7 +498,7 @@ impl Smb2Connection {
                 self.decryption_key.lock().await.clone().ok_or_else(|| {
                     OverthroneError::Smb("SMB3 decryption key not set".to_string())
                 })?;
-            let plaintext = smb3_decrypt_aes128_gcm(&buf, &dec_key)?;
+            let plaintext = smb3_decrypt(&buf, &dec_key, self.negotiated_cipher())?;
             return Ok(plaintext);
         }
 
@@ -449,7 +510,10 @@ impl Smb2Connection {
     async fn recv_verified(&self) -> Result<Vec<u8>> {
         let buf = self.recv().await?;
 
-        // Skip verification if too many consecutive signing failures (WS2025 non-standard KDF)
+        // Skip verification once the peer has repeatedly presented packets we cannot
+        // validate. With the cipher-correct signing algorithm this should never
+        // trigger; it is retained purely as a safety net so that one bad packet
+        // cannot brick an otherwise working session.
         if self
             .signing_failures
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -467,16 +531,48 @@ impl Smb2Connection {
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
-            if !Self::verify_packet(&buf, key, dialect, true, preauth.as_deref()) {
+            let gmac = self.uses_gmac_signing(dialect);
+            if !Self::verify_packet(&buf, key, dialect, true, preauth.as_deref(), gmac) {
+                // Diagnostic: try all 4 signing combinations to find what the
+                // server actually uses. Windows SMB 3.1.1 with AES-128-GCM may
+                // use CMAC (not GMAC) or a different KDF context.
+                let verify = |sk: &[u8], use_gmac: bool| -> bool {
+                    let mut vbuf = buf.clone();
+                    let sig_off = 48;
+                    if vbuf.len() < sig_off + 16 {
+                        return false;
+                    }
+                    let saved: [u8; 16] = vbuf[sig_off..sig_off + 16].try_into().unwrap_or([0; 16]);
+                    vbuf[sig_off..sig_off + 16].fill(0);
+                    let expected = if use_gmac {
+                        aes_gmac(sk, &Self::gmac_nonce(&vbuf), &vbuf)
+                    } else {
+                        Ok(aes_cmac_16(sk, &vbuf))
+                    };
+                    expected.map(|e| e[..] == saved[..]).unwrap_or(false)
+                };
+                // Key combinations: (preauth_hash or SmbSign context) x (CMAC or GMAC)
+                let sk_preauth = derive_signing_key(key, dialect, preauth.as_deref());
+                let sk_smbsign = derive_signing_key(key, dialect, None);
+                let try_cm_pre = verify(&sk_preauth, false);
+                let try_gm_pre = verify(&sk_preauth, true);
+                let try_cm_sign = verify(&sk_smbsign, false);
+                let try_gm_sign = verify(&sk_smbsign, true);
+                warn!(
+                    "SMB2: SIGN-DIAG CMAC+preauth={} GMAC+preauth={} CMAC+SmbSign={} GMAC+SmbSign={}",
+                    try_cm_pre, try_gm_pre, try_cm_sign, try_gm_sign
+                );
                 let failures = self
                     .signing_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                     + 1;
                 if failures >= SIGNING_FAILURE_THRESHOLD {
                     warn!(
-                        "SMB2: {} consecutive signing failures -- disabling verification \
-                           for this session (WS2025 signing quirk).",
-                        failures
+                        "SMB2: {} consecutive signing failures -- disabling signature \
+                           verification for this session (dialect=0x{:04X}, cipher={}).",
+                        failures,
+                        dialect,
+                        self.negotiated_cipher().name()
                     );
                 } else {
                     warn!(
@@ -493,6 +589,173 @@ impl Smb2Connection {
     /// Get the next message ID.
     fn next_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Cipher used to protect this session once SMB3 encryption is enabled.
+    ///
+    /// * SMB 3.1.1 -- the cipher selected by the server in the
+    ///   SMB2_ENCRYPTION_CAPABILITIES negotiate context (MS-SMB2 §3.3.5.4).
+    ///   Windows prefers AES-128-GCM when the client offers it.
+    /// * SMB 3.0/3.0.2 -- no cipher negotiation exists; AES-128-CCM is mandatory.
+    fn negotiated_cipher(&self) -> Smb3Cipher {
+        if self.dialect.load(Ordering::Relaxed) >= SMB2_DIALECT_311 {
+            match self.cipher_id.load(Ordering::Relaxed) {
+                SMB2_CIPHER_AES128_CCM => Smb3Cipher::Aes128Ccm,
+                SMB2_CIPHER_AES128_GCM => Smb3Cipher::Aes128Gcm,
+                // 0 means the server did not return an encryption context (or had
+                // no cipher in common). Fall back to our own first preference.
+                _ => Smb3Cipher::Aes128Gcm,
+            }
+        } else {
+            Smb3Cipher::Aes128Ccm
+        }
+    }
+
+    /// Whether packet signatures for this dialect use AES-GMAC rather than AES-CMAC.
+    ///
+    /// Per MS-SMB2 §3.1.4.1 the SMB 3.1.1 signing algorithm is bound to the
+    /// negotiated cipher: AES-128-GMAC when the cipher is AES-128-GCM (or
+    /// AES-256-GCM), AES-128-CMAC otherwise. Signing a GCM session with CMAC (or
+    /// vice versa) produces a signature the peer rejects, which shows up as
+    /// STATUS_ACCESS_DENIED on the next request.
+    fn uses_gmac_signing(&self, dialect: u16) -> bool {
+        dialect >= SMB2_DIALECT_311 && self.negotiated_cipher() == Smb3Cipher::Aes128Gcm
+    }
+
+    /// Compute the AES-GMAC nonce for packet signing (MS-SMB2 §3.1.4.1.1).
+    ///
+    /// The 12-byte nonce is MessageId (8 bytes, little-endian) followed by the
+    /// full 4-byte Flags field from the SMB2 header. Per the spec, the nonce
+    /// uses the raw Flags value — e.g. a signed server response has
+    /// SERVER_TO_REDIR (0x01) | SIGNED (0x08) = 0x09, not just 0x01.
+    ///
+    /// A previous implementation masked flags to `SERVER_TO_REDIR` only, which
+    /// broke GMAC verification against Windows servers that set the SIGNED bit
+    /// (0x08) in their responses — a common configuration for SMB 3.1.1 with
+    /// AES-128-GCM.
+    fn gmac_nonce(pkt: &[u8]) -> [u8; 12] {
+        let msg_id = u64::from_le_bytes([
+            pkt[24], pkt[25], pkt[26], pkt[27], pkt[28], pkt[29], pkt[30], pkt[31],
+        ]);
+        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
+
+        let mut nonce = [0u8; 12];
+        nonce[..8].copy_from_slice(&msg_id.to_le_bytes());
+        nonce[8..].copy_from_slice(&flags.to_le_bytes());
+        nonce
+    }
+
+    /// Compute the 16-byte packet signature for `pkt` with its signature field
+    /// already zeroed (MS-SMB2 §3.1.4.1).
+    ///
+    /// `gmac` selects AES-128-GMAC over AES-128-CMAC for the SMB 3.1.1 family;
+    /// see [`Self::uses_gmac_signing`].
+    fn compute_signature(
+        pkt: &[u8],
+        session_key: &[u8],
+        dialect: u16,
+        preauth_hash: Option<&[u8]>,
+        gmac: bool,
+    ) -> Result<[u8; 16]> {
+        if dialect < SMB2_DIALECT_300 {
+            // SMB 2.x: HMAC-SHA256(session_key, packet)[0:16]
+            let mut mac =
+                HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
+            mac.update(pkt);
+            let result = mac.finalize().into_bytes();
+            let mut sig = [0u8; 16];
+            sig.copy_from_slice(&result[..16]);
+            return Ok(sig);
+        }
+
+        let signing_key = derive_signing_key(session_key, dialect, preauth_hash);
+        if gmac {
+            aes_gmac(&signing_key, &Self::gmac_nonce(pkt), pkt)
+        } else {
+            Ok(aes_cmac_16(&signing_key, pkt))
+        }
+    }
+
+    /// Sign an SMB2/3 packet (MS-SMB2 §3.1.4.1).
+    ///
+    /// SMB 2.x uses HMAC-SHA256(session_key, packet)[0:16]. SMB 3.0/3.0.2 derives
+    /// a signing key via the SP800-108 KDF and uses AES-128-CMAC. SMB 3.1.1 uses
+    /// AES-128-GMAC when the negotiated cipher is AES-128-GCM and AES-128-CMAC
+    /// otherwise. `preauth_hash` is the Session.PreauthIntegrityHashValue used as
+    /// the SMB 3.1.1 KDF context.
+    fn sign_packet(
+        pkt: &mut [u8],
+        session_key: &[u8],
+        dialect: u16,
+        preauth_hash: Option<&[u8]>,
+        gmac: bool,
+    ) -> Result<()> {
+        if pkt.len() < SMB2_HEADER_SIZE {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 sign: packet too short ({} bytes)",
+                pkt.len()
+            )));
+        }
+
+        // Set SMB2_FLAGS_SIGNED (bit 3) in the Flags field (bytes 16..20)
+        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]) | SMB2_FLAGS_SIGNED;
+        pkt[16..20].copy_from_slice(&flags.to_le_bytes());
+
+        // Zero the signature field before computing
+        pkt[48..64].fill(0);
+
+        let sig = Self::compute_signature(pkt, session_key, dialect, preauth_hash, gmac)?;
+        pkt[48..64].copy_from_slice(&sig);
+        Ok(())
+    }
+
+    /// Verify an SMB2/3 packet signature (MS-SMB2 §3.1.4.1).
+    /// Returns true if the signature is valid or if signing is not enabled.
+    /// `preauth_hash` is the Session.PreauthIntegrityHashValue for SMB 3.1.1 (used as KDF context).
+    fn verify_packet(
+        pkt: &[u8],
+        session_key: &[u8],
+        dialect: u16,
+        sign_required: bool,
+        preauth_hash: Option<&[u8]>,
+        gmac: bool,
+    ) -> bool {
+        if pkt.len() < SMB2_HEADER_SIZE {
+            return !sign_required;
+        }
+
+        // Check if the packet has the SIGNED flag set
+        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
+        if flags & SMB2_FLAGS_SIGNED == 0 {
+            return !sign_required;
+        }
+
+        // Extract the claimed signature
+        let claimed_sig = &pkt[48..64];
+
+        // Compute the expected signature over the entire packet, with sig field zeroed
+        let mut verify_buf = pkt.to_vec();
+        verify_buf[48..64].fill(0);
+
+        let expected_sig =
+            match Self::compute_signature(&verify_buf, session_key, dialect, preauth_hash, gmac) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    warn!("SMB2: could not compute expected signature: {e}");
+                    return false;
+                }
+            };
+
+        if claimed_sig != expected_sig {
+            warn!(
+                "SMB2 signature mismatch! claimed={:02x?}, expected={:02x?}, dialect=0x{:04X}, \
+                   gmac={gmac}",
+                claimed_sig, expected_sig, dialect
+            );
+            return false;
+        }
+
+        true
     }
 
     // ----------------- SMB2 Header Builder -----------------
@@ -533,88 +796,6 @@ impl Smb2Connection {
         hdr
     }
 
-    /// Sign an SMB2/3 packet (MS-SMB2 §3.1.4.1).
-    /// SMB 2.x uses HMAC-SHA256(session_key, packet)[0:16].
-    /// SMB 3.x+ derives a signing key via SP800-108 KDF and uses AES-128-CMAC.
-    /// `preauth_hash` is the Session.PreauthIntegrityHashValue for SMB 3.1.1 (used as KDF context).
-    fn sign_packet(pkt: &mut [u8], session_key: &[u8], dialect: u16, preauth_hash: Option<&[u8]>) {
-        // Set SMB2_FLAGS_SIGNED (bit 3) in the Flags field (bytes 16..20)
-        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
-        let flags = flags | SMB2_FLAGS_SIGNED;
-        pkt[16..20].copy_from_slice(&flags.to_le_bytes());
-
-        // Zero the signature field before computing
-        pkt[48..64].fill(0);
-
-        if dialect >= SMB2_DIALECT_300 {
-            let signing_key = derive_signing_key(session_key, dialect, preauth_hash);
-            let sig = aes_cmac_16(&signing_key, pkt);
-            pkt[48..64].copy_from_slice(&sig);
-        } else {
-            // SMB 2.x: HMAC-SHA256(session_key, packet)[0:16]
-            let mut mac =
-                HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
-            mac.update(pkt);
-            let result = mac.finalize().into_bytes();
-            pkt[48..64].copy_from_slice(&result[..16]);
-        }
-    }
-
-    /// Verify an SMB2/3 packet signature (MS-SMB2 §3.1.4.1).
-    /// Returns true if the signature is valid or if signing is not enabled.
-    /// `preauth_hash` is the Session.PreauthIntegrityHashValue for SMB 3.1.1 (used as KDF context).
-    fn verify_packet(
-        pkt: &[u8],
-        session_key: &[u8],
-        dialect: u16,
-        sign_required: bool,
-        preauth_hash: Option<&[u8]>,
-    ) -> bool {
-        if pkt.len() < 64 {
-            return !sign_required;
-        }
-
-        // Check if the packet has the SIGNED flag set
-        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
-        if flags & SMB2_FLAGS_SIGNED == 0 {
-            return !sign_required;
-        }
-
-        // Extract the claimed signature
-        let claimed_sig = &pkt[48..64];
-
-        // Compute the expected signature over the entire packet, with sig field zeroed
-        let mut verify_buf = pkt.to_vec();
-        verify_buf[48..64].fill(0);
-
-        let expected_sig: [u8; 16] = if dialect >= SMB2_DIALECT_300 {
-            let signing_key = derive_signing_key(session_key, dialect, preauth_hash);
-            let cmac = aes_cmac_16(&signing_key, &verify_buf);
-            let mut sig = [0u8; 16];
-            sig.copy_from_slice(&cmac);
-            sig
-        } else {
-            // SMB 2.x: HMAC-SHA256[0:16]
-            let mut mac =
-                HmacSha256::new_from_slice(session_key).expect("HMAC-SHA256 accepts any key size");
-            mac.update(&verify_buf);
-            let result = mac.finalize().into_bytes();
-            let mut sig = [0u8; 16];
-            sig.copy_from_slice(&result[..16]);
-            sig
-        };
-
-        if claimed_sig != expected_sig {
-            warn!(
-                "SMB2 signature mismatch! claimed={:02x?}, expected={:02x?}, dialect=0x{:04X}",
-                claimed_sig, expected_sig, dialect
-            );
-            return false;
-        }
-
-        true
-    }
-
     /// Send a packet, signing it first if signing is required and a session key is available.
     /// When SMB3 encryption is active, signing occurs on the plaintext before encryption wrapping.
     async fn send_signed(&self, pkt: &mut [u8]) -> Result<()> {
@@ -625,7 +806,8 @@ impl Smb2Connection {
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
-            Self::sign_packet(pkt, key, dialect, preauth.as_deref());
+            let gmac = self.uses_gmac_signing(dialect);
+            Self::sign_packet(pkt, key, dialect, preauth.as_deref(), gmac)?;
         }
         self.send(pkt).await
     }
@@ -711,6 +893,7 @@ impl Smb2Connection {
 
             // Pre-Auth Integrity Context (SHA-512)
             // ContextType = 0x0001, DataLength = 38
+            let preauth_start = body.len();
             body.extend_from_slice(&1u16.to_le_bytes());
             body.extend_from_slice(&38u16.to_le_bytes());
             body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
@@ -724,6 +907,13 @@ impl Smb2Connection {
             rand::rng().fill(&mut salt);
             body.extend_from_slice(&salt);
 
+            // Pad to 8-byte boundary before next negotiate context
+            // Per MS-SMB2 2.2.3.1.7: subsequent contexts MUST appear at
+            // the first 8-byte aligned offset following the previous context.
+            let preauth_len = body.len() - preauth_start;
+            let ctx_pad = (8 - (preauth_len % 8)) % 8;
+            body.extend(std::iter::repeat_n(0, ctx_pad));
+
             // Encryption Capabilities Context (required for WS2022/2025)
             // ContextType = 0x0002, DataLength = 6 (CipherCount + 2 ciphers)
             body.extend_from_slice(&2u16.to_le_bytes()); // EncryptionCapabilities
@@ -731,10 +921,12 @@ impl Smb2Connection {
             body.extend_from_slice(&0u32.to_le_bytes()); // Reserved
             // CipherCount = 2
             body.extend_from_slice(&2u16.to_le_bytes());
-            // Cipher = AES-128-CCM (0x0001)
-            body.extend_from_slice(&1u16.to_le_bytes());
-            // Cipher = AES-128-GCM (0x0002)
-            body.extend_from_slice(&2u16.to_le_bytes());
+            // Ciphers are listed in order of preference. Windows prefers
+            // AES-128-GCM when both sides support it, and Microsoft's own SMB 3.1.1
+            // test client offers GCM first -- matching that ordering avoids a server
+            // that honours the client's order selecting CCM.
+            body.extend_from_slice(&SMB2_CIPHER_AES128_GCM.to_le_bytes());
+            body.extend_from_slice(&SMB2_CIPHER_AES128_CCM.to_le_bytes());
         }
 
         let mut pkt = hdr;
@@ -916,18 +1108,28 @@ impl Smb2Connection {
                     if ctx_data.len() >= 4 {
                         let cipher_id = u16::from_le_bytes([ctx_data[2], ctx_data[3]]);
                         self.cipher_id.store(cipher_id, Ordering::Relaxed);
-                        debug!(
-                            "SMB2: Server selected cipher 0x{cipher_id:04X} ({})",
-                            match cipher_id {
-                                0x0001 => "AES-128-CCM",
-                                0x0002 => "AES-128-GCM",
-                                _ => "unknown",
-                            }
-                        );
-                        if cipher_id != 0 {
-                            self.encryption_required
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
+                        // We only advertise AES-128-CCM and AES-128-GCM, so the server
+                        // must pick one of those. Anything else means the response is
+                        // malformed or the server ignored our preference list -- say so
+                        // loudly rather than encrypting with a key/cipher mismatch.
+                        match cipher_id {
+                            SMB2_CIPHER_AES128_CCM | SMB2_CIPHER_AES128_GCM => debug!(
+                                "SMB2: Server selected cipher 0x{cipher_id:04X} ({})",
+                                if cipher_id == SMB2_CIPHER_AES128_CCM {
+                                    "AES-128-CCM"
+                                } else {
+                                    "AES-128-GCM"
+                                }
+                            ),
+                            other => warn!(
+                                "SMB2: Server selected unsupported cipher 0x{other:04X}; \
+                                 falling back to AES-128-GCM. Encryption may fail."
+                            ),
                         }
+                        // NOTE: We do NOT set encryption_required here.
+                        // Per MS-SMB2, the session setup request (which follows negotiate)
+                        // MUST be sent unencrypted.  Encryption is enabled only after
+                        // session setup derives the session key (see enable_encryption).
                     }
                 }
                 _ => {
@@ -1116,6 +1318,21 @@ impl Smb2Connection {
         // NTLM ExportedSessionKey (untransformed). The PreauthIntegrityHashValue is used
         // as the KDF context (label = "SMBSigningKey\x00"), NOT XOR'd with the session key.
         // Impacket confirms this behavior -- no SessionKey XOR on WS2025.
+        // Diagnostic: log the ExportedSessionKey and derived signing key so we can
+        // compare with impacket/NetExec when verification fails.
+        {
+            let preauth = self.preauth_hash.lock().await.clone();
+            let dialect = self.dialect.load(Ordering::Relaxed);
+            let sk = derive_signing_key(&session_key, dialect, preauth.as_deref());
+            debug!(
+                "SMB2-SIGN-DIAG: exported_session_key={:02x?}, preauth_hash[0..8]={:02x?}, dialect=0x{:04X}, signing_key={:02x?}",
+                session_key,
+                preauth.as_ref().map(|h| &h[..8]).unwrap_or(&[]),
+                dialect,
+                sk
+            );
+        }
+
         *self.session_key.lock().await = Some(session_key.clone());
 
         // DO NOT verify the session setup leg 2 response signature!
@@ -2220,7 +2437,19 @@ impl Smb2Connection {
         self.encryption_required
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
-        debug!("SMB3 encryption enabled (AES-128-GCM)");
+        let cipher = self.negotiated_cipher();
+        if dialect >= SMB2_DIALECT_311 && self.cipher_id.load(Ordering::Relaxed) == 0 {
+            warn!(
+                "SMB3: server did not return a usable cipher in the \
+                   SMB2_ENCRYPTION_CAPABILITIES context; assuming {}",
+                cipher.name()
+            );
+        }
+        debug!(
+            "SMB3 encryption enabled ({} , dialect 0x{:04X})",
+            cipher.name(),
+            dialect
+        );
         Ok(())
     }
 
@@ -2254,6 +2483,119 @@ pub struct NtlmChallenge {
     pub server_challenge: [u8; 8],
     pub target_info: Vec<u8>,
     pub negotiate_flags: u32,
+}
+
+/// Identity a server discloses in the NTLM `CHALLENGE` during an
+/// unauthenticated SMB2 session setup.
+#[derive(Debug, Clone, Default)]
+pub struct Smb2ServerIdentity {
+    /// NetBIOS computer name (`MsvAvNbComputerName`).
+    pub computer_name: Option<String>,
+    /// NetBIOS domain name (`MsvAvNbDomainName`).
+    pub domain_name: Option<String>,
+    /// DNS host name / FQDN (`MsvAvDnsComputerName`).
+    pub dns_computer_name: Option<String>,
+    /// DNS domain name (`MsvAvDnsDomainName`).
+    pub dns_domain_name: Option<String>,
+    /// DNS forest / tree name (`MsvAvDnsTreeName`).
+    pub dns_tree_name: Option<String>,
+    /// NTLM negotiate flags echoed by the server.
+    pub negotiate_flags: u32,
+}
+
+/// Decode a UTF-16LE `AV_PAIR` value into a trimmed `String`.
+fn av_utf16(pairs: &[(u16, Vec<u8>)], id: u16) -> Option<String> {
+    let (_, value) = pairs.iter().find(|(k, _)| *k == id)?;
+    let units: Vec<u16> = value
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
+    let s = String::from_utf16_lossy(&units);
+    let s = s.trim_end_matches('\0');
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+impl Smb2Connection {
+    /// Fingerprint a host without credentials: negotiate, then read the server
+    /// identity out of the NTLM `CHALLENGE`.
+    pub async fn probe_server_identity(target: &str) -> Result<Smb2ServerIdentity> {
+        let conn = Self::connect(target, 445).await?;
+        conn.negotiate().await?;
+        conn.probe_identity().await
+    }
+
+    /// Read the server identity from an unauthenticated NTLM `CHALLENGE`.
+    ///
+    /// Sends `SESSION_SETUP` carrying an NTLM `NEGOTIATE`; the server answers
+    /// `STATUS_MORE_PROCESSING_REQUIRED` with a `CHALLENGE` whose `AV_PAIR`s
+    /// name the host and its domain. This is the same source NetExec,
+    /// CrackMapExec and smbclient use to fill their host columns, and it works
+    /// even when null sessions are disabled because the challenge is produced
+    /// before any credential is validated.
+    pub async fn probe_identity(&self) -> Result<Smb2ServerIdentity> {
+        let type1 = build_ntlmssp_negotiate();
+        let spnego_init = wrap_spnego_init(&type1);
+
+        let hdr = self.build_header(SMB2_SESSION_SETUP, 1).await;
+        let mut body = Vec::with_capacity(24 + spnego_init.len());
+        body.extend_from_slice(&25u16.to_le_bytes()); // StructureSize
+        body.push(0); // Flags
+        body.push(0x01); // SecurityMode = signing enabled
+        body.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
+        body.extend_from_slice(&0u32.to_le_bytes()); // Channel
+        let sec_offset = (SMB2_HEADER_SIZE + 24) as u16;
+        body.extend_from_slice(&sec_offset.to_le_bytes());
+        body.extend_from_slice(&(spnego_init.len() as u16).to_le_bytes());
+        body.extend_from_slice(&0u64.to_le_bytes()); // PreviousSessionId
+        while body.len() < 24 {
+            body.push(0);
+        }
+        body.extend_from_slice(&spnego_init);
+
+        let mut pkt = hdr;
+        pkt.extend_from_slice(&body);
+        self.send(&pkt).await?;
+        let resp = self.recv_verified().await?;
+
+        if resp.len() < SMB2_HEADER_SIZE + 8 {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 identity probe response too short: {} bytes",
+                resp.len()
+            )));
+        }
+        let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
+        if status != STATUS_MORE_PROCESSING_REQUIRED {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 identity probe: expected STATUS_MORE_PROCESSING_REQUIRED, got 0x{status:08X}"
+            )));
+        }
+
+        let resp_body = &resp[SMB2_HEADER_SIZE..];
+        let sec_buf_offset = u16::from_le_bytes([resp_body[4], resp_body[5]]) as usize;
+        let sec_buf_len = u16::from_le_bytes([resp_body[6], resp_body[7]]) as usize;
+        let rel = sec_buf_offset.saturating_sub(SMB2_HEADER_SIZE);
+        if rel + sec_buf_len > resp_body.len() {
+            return Err(OverthroneError::Smb(
+                "SMB2 identity probe: security buffer overflow".to_string(),
+            ));
+        }
+        let type2 = extract_ntlmssp_from_spnego(&resp_body[rel..rel + sec_buf_len])?;
+        let challenge = parse_ntlmssp_challenge(&type2)?;
+        let pairs = crate::proto::ntlm::parse_av_pairs(&challenge.target_info);
+
+        Ok(Smb2ServerIdentity {
+            computer_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_NB_COMPUTER_NAME),
+            domain_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_NB_DOMAIN_NAME),
+            dns_computer_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_DNS_COMPUTER_NAME),
+            dns_domain_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_DNS_DOMAIN_NAME),
+            dns_tree_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_DNS_TREE_NAME),
+            negotiate_flags: challenge.negotiate_flags,
+        })
+    }
 }
 
 /// Build NTLMSSP Type 1 (Negotiate) message.
@@ -2721,6 +3063,28 @@ pub fn wrap_spnego_response(ntlmssp: &[u8]) -> Vec<u8> {
     asn1_context_tag(1, &neg_token_resp)
 }
 
+/// The DER encoding of the `mechTypes` sequence holding the single NTLMSSP OID.
+///
+/// Windows signs exactly these bytes when computing the SPNEGO `mechListMIC`
+/// ([RFC 4178 4.2.2]), so any client that negotiates integrity over LDAP has to
+/// reproduce them byte for byte.
+pub const SPNEGO_NTLMSSP_MECHLIST: &[u8] = &[
+    0x30, 0x0c, 0x06, 0x0a, 0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0a,
+];
+
+/// Wrap an NTLMSSP token in a SPNEGO NegTokenResp that also carries the
+/// `mechListMIC` [3].
+///
+/// A DC that negotiates NTLM signing expects the mechListMIC in the final
+/// bind exchange; omitting it makes Windows fail the bind with
+/// `SEC_E_MESSAGE_ALTERED` / rc=49.
+pub fn wrap_spnego_response_with_mic(ntlmssp: &[u8], mech_list_mic: &[u8]) -> Vec<u8> {
+    let resp_token = asn1_context_tag(2, &asn1_octet_string(ntlmssp));
+    let mic = asn1_context_tag(3, &asn1_octet_string(mech_list_mic));
+    let neg_token_resp = asn1_sequence(&[resp_token, mic].concat());
+    asn1_context_tag(1, &neg_token_resp)
+}
+
 /// Wrap a Kerberos AP-REQ token in a SPNEGO NegTokenInit.
 fn wrap_spnego_kerberos(ap_req: &[u8]) -> Vec<u8> {
     let mech_types = asn1_sequence(KERBEROS_OID);
@@ -2848,10 +3212,18 @@ fn sp800_108_counter_kdf_nosep(key_in: &[u8], label: &[u8], context: &[u8]) -> V
     mac.finalize().into_bytes()[..16].to_vec()
 }
 
-/// Derive SMB 3.x encryption key for the given direction.
-/// Uses SP800-108 KDF with direction-specific labels, matching Impacket's key derivation.
-/// SMB 3.1.1: label=SMBC2SCipherKey/SMBS2CCipherKey +0x00, context=PreauthIntegrityHashValue
-/// SMB 3.0.x: label=SMB2AESCCM +0x00, context=ServerIn /ServerOut +0x00
+/// Derive the SMB 3.x encryption key for the given direction (MS-SMB2 §3.2.4.1.3).
+///
+/// * SMB 3.1.1 -- label `SMBC2SCipherKey\0` (client to server) or
+///   `SMBS2CCipherKey\0` (server to client), context is the 64-byte
+///   Session.PreauthIntegrityHashValue.
+/// * SMB 3.0/3.0.2 -- label `SMB2AESCCM\0`, context `ServerOut\0` for client to
+///   server and `ServerIn \0` for server to client (the context literal really
+///   does contain a trailing space; it is what makes the string 8 bytes).
+///
+/// The 3.1.1 and 3.0.x labels are not interchangeable -- deriving a 3.0.x key
+/// with the 3.1.1 label yields a key the server will never agree on, which shows
+/// up as garbage on the wire once encryption is enabled.
 fn derive_smb3_encryption_key(
     session_key: &[u8],
     is_server_to_client: bool,
@@ -2859,7 +3231,7 @@ fn derive_smb3_encryption_key(
     dialect: u16,
 ) -> Vec<u8> {
     if dialect >= SMB2_DIALECT_311 {
-        let label = if is_server_to_client {
+        let label: &[u8] = if is_server_to_client {
             b"SMBS2CCipherKey\x00"
         } else {
             b"SMBC2SCipherKey\x00"
@@ -2868,72 +3240,79 @@ fn derive_smb3_encryption_key(
             return sp800_108_counter_kdf(session_key, label, hash);
         }
     }
-    let label = if is_server_to_client {
-        SMB3_ENCRYPTION_KEY_LABEL_S2C
+    let context = if is_server_to_client {
+        SMB3_CCM_KEY_CTX_S2C
     } else {
-        SMB3_ENCRYPTION_KEY_LABEL_C2S
+        SMB3_CCM_KEY_CTX_C2S
     };
-    sp800_108_counter_kdf(session_key, label, SMB3_ENCRYPTION_KEY_CONTEXT)
+    sp800_108_counter_kdf(session_key, SMB3_CCM_KEY_LABEL, context)
 }
 
-/// Encrypt an SMB3 payload using AES-128-GCM and build a Transform_Header.
+/// Build a 52-byte SMB3 Transform_Header (MS-SMB2 §2.2.41).
 ///
-/// Returns the complete Transform_Header + encrypted payload (with 16-byte GCM tag appended).
-/// The nonce is randomly generated and embedded in the header.
-fn smb3_encrypt_aes128_gcm(
+/// The Signature field is left zeroed -- the caller fills it with the AEAD tag
+/// once the payload has been authenticated. Everything from the Nonce field to
+/// the end of the header is the associated data of the AEAD.
+fn build_transform_header(
+    session_id: u64,
+    original_size: u32,
+    nonce: &[u8],
+) -> [u8; SMB3_TRANSFORM_HEADER_SIZE] {
+    let mut tf = [0u8; SMB3_TRANSFORM_HEADER_SIZE];
+    tf[0..4].copy_from_slice(SMB3_TRANSFORM_MAGIC);
+    tf[SMB3_TF_NONCE..SMB3_TF_NONCE + nonce.len()].copy_from_slice(nonce);
+    tf[SMB3_TF_MSG_SIZE..SMB3_TF_MSG_SIZE + 4].copy_from_slice(&original_size.to_le_bytes());
+    tf[SMB3_TF_FLAGS..SMB3_TF_FLAGS + 2].copy_from_slice(&SMB3_TF_FLAG_ENCRYPTED.to_le_bytes());
+    tf[SMB3_TF_SESSION_ID..SMB3_TF_SESSION_ID + 8].copy_from_slice(&session_id.to_le_bytes());
+    tf
+}
+
+/// Encrypt an SMB3 payload and wrap it in a Transform_Header.
+///
+/// Returns `Transform_Header (52 bytes) || ciphertext`, with the AEAD tag stored
+/// in the header's Signature field (not appended to the payload).
+fn smb3_encrypt(
     plaintext: &[u8],
     encryption_key: &[u8],
     session_id: u64,
+    cipher: Smb3Cipher,
 ) -> Result<Vec<u8>> {
-    use aes_gcm::{
-        Aes128Gcm, Nonce,
-        aead::{Aead, KeyInit},
+    let mut nonce = vec![0u8; cipher.nonce_len()];
+    rand::rng().fill(&mut nonce[..]);
+
+    let mut tf = build_transform_header(session_id, plaintext.len() as u32, &nonce);
+    let aad = tf[SMB3_TF_NONCE..].to_vec();
+
+    let (ciphertext, tag) = match cipher {
+        Smb3Cipher::Aes128Gcm => aes128_gcm_seal(encryption_key, &nonce, &aad, plaintext)?,
+        Smb3Cipher::Aes128Ccm => {
+            let (ct, tag) = aes128_ccm_seal(encryption_key, &nonce, &aad, plaintext, 16)?;
+            let mut t = [0u8; 16];
+            t.copy_from_slice(&tag);
+            (ct, t)
+        }
     };
 
-    let key = Aes128Gcm::new_from_slice(encryption_key)
-        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM key init: {e}")))?;
+    tf[SMB3_TF_SIGNATURE..SMB3_TF_SIGNATURE + 16].copy_from_slice(&tag);
 
-    // Generate random 12-byte nonce
-    let mut nonce_bytes = [0u8; 12];
-    rand::rng().fill(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-
-    // Encrypt with GCM -- tag is appended to ciphertext
-    let ciphertext = key
-        .encrypt(nonce, plaintext)
-        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM encrypt failed: {e}")))?;
-
-    // Build Transform_Header (52 bytes) + encrypted data
     let mut result = Vec::with_capacity(SMB3_TRANSFORM_HEADER_SIZE + ciphertext.len());
-    result.extend_from_slice(SMB3_TRANSFORM_MAGIC); // 0..4: ProtocolId
-    result.extend_from_slice(&(plaintext.len() as u32).to_le_bytes()); // 4..8: OriginalMessageSize
-    result.extend_from_slice(&0u16.to_le_bytes()); // 8..10: Reserved
-    result.extend_from_slice(&SMB3_ENCRYPTION_AES128_GCM.to_le_bytes()); // 10..12: Algorithm
-    result.extend_from_slice(&session_id.to_le_bytes()); // 12..20: SessionId
-    result.extend_from_slice(&nonce_bytes); // 20..32: Nonce (12 bytes)
-    result.extend_from_slice(&[0u8; 4]); // 32..36: Reserved
-    result.extend_from_slice(&[0u8; 16]); // 36..52: RemainingSessionKey (zeroed)
-    result.extend_from_slice(&ciphertext); // 52..: EncryptedData + GCM tag
-
+    result.extend_from_slice(&tf);
+    result.extend_from_slice(&ciphertext);
     Ok(result)
 }
 
-/// Decrypt an SMB3 Transform_Header-wrapped payload using AES-128-GCM.
+/// Decrypt a Transform_Header-wrapped SMB3 payload.
 ///
-/// Expects `data` to start with a 52-byte Transform_Header followed by
-/// encrypted payload + 16-byte GCM authentication tag.
-/// Returns the decrypted plaintext on success.
-fn smb3_decrypt_aes128_gcm(data: &[u8], encryption_key: &[u8]) -> Result<Vec<u8>> {
-    use aes_gcm::{
-        Aes128Gcm, Nonce,
-        aead::{Aead, KeyInit},
-    };
-
-    if data.len() < SMB3_TRANSFORM_HEADER_SIZE + 16 {
+/// `cipher` must match the cipher negotiated for the session: for SMB 3.1.1 it is
+/// the CipherId from the NEGOTIATE response, for SMB 3.0/3.0.2 it is always
+/// AES-128-CCM. AEAD tag mismatches are reported as an error rather than
+/// silently returning corrupt plaintext.
+fn smb3_decrypt(data: &[u8], decryption_key: &[u8], cipher: Smb3Cipher) -> Result<Vec<u8>> {
+    if data.len() < SMB3_TRANSFORM_HEADER_SIZE {
         return Err(OverthroneError::Smb(format!(
             "SMB3 encrypted packet too short: {} bytes (need at least {})",
             data.len(),
-            SMB3_TRANSFORM_HEADER_SIZE + 16
+            SMB3_TRANSFORM_HEADER_SIZE
         )));
     }
 
@@ -2944,20 +3323,40 @@ fn smb3_decrypt_aes128_gcm(data: &[u8], encryption_key: &[u8]) -> Result<Vec<u8>
         ));
     }
 
-    // Extract nonce (bytes 20..32)
-    let nonce = Nonce::from_slice(&data[20..32]);
+    let tf_flags = u16::from_le_bytes([data[SMB3_TF_FLAGS], data[SMB3_TF_FLAGS + 1]]);
+    if tf_flags & SMB3_TF_FLAG_ENCRYPTED == 0 {
+        return Err(OverthroneError::Smb(format!(
+            "SMB3 Transform_Header Flags=0x{tf_flags:04X} has no encrypted bit"
+        )));
+    }
 
-    // Extract encrypted payload (bytes 52..)
-    let encrypted = &data[SMB3_TRANSFORM_HEADER_SIZE..];
+    let original_size = u32::from_le_bytes([
+        data[SMB3_TF_MSG_SIZE],
+        data[SMB3_TF_MSG_SIZE + 1],
+        data[SMB3_TF_MSG_SIZE + 2],
+        data[SMB3_TF_MSG_SIZE + 3],
+    ]) as usize;
 
-    let key = Aes128Gcm::new_from_slice(encryption_key)
-        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM key init: {e}")))?;
+    let mut tag = [0u8; 16];
+    tag.copy_from_slice(&data[SMB3_TF_SIGNATURE..SMB3_TF_SIGNATURE + 16]);
 
-    let plaintext = key
-        .decrypt(nonce, encrypted)
-        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM decrypt failed: {e}")))?;
+    // Associated data = Nonce field through the end of the Transform_Header.
+    let aad = &data[SMB3_TF_NONCE..SMB3_TRANSFORM_HEADER_SIZE];
+    let nonce = &data[SMB3_TF_NONCE..SMB3_TF_NONCE + cipher.nonce_len()];
+    let ciphertext = &data[SMB3_TRANSFORM_HEADER_SIZE..];
 
-    Ok(plaintext)
+    if ciphertext.len() != original_size {
+        return Err(OverthroneError::Smb(format!(
+            "SMB3 Transform_Header length mismatch: OriginalMessageSize={original_size}, \
+             payload={}",
+            ciphertext.len()
+        )));
+    }
+
+    match cipher {
+        Smb3Cipher::Aes128Gcm => aes128_gcm_open(decryption_key, nonce, aad, ciphertext, &tag),
+        Smb3Cipher::Aes128Ccm => aes128_ccm_open(decryption_key, nonce, aad, ciphertext, &tag),
+    }
 }
 
 /// Check whether a received packet is wrapped in an SMB3 Transform_Header.
@@ -2965,32 +3364,258 @@ fn is_smb3_encrypted(data: &[u8]) -> bool {
     data.len() >= 4 && &data[0..4] == SMB3_TRANSFORM_MAGIC
 }
 
-/// Compute AES-GMAC signature: GMAC(key, nonce, aad) -> 16-byte tag.
-/// Used by SMB 3.x when the cipher is AES-128-GCM (cipher_id=0x0002).
-/// Uses the aes-gcm crate's AeadInPlace API with empty plaintext.
-#[cfg(test)]
-#[allow(dead_code)]
-fn aes_gmac_16(key: &[u8], aad: &[u8]) -> [u8; 16] {
-    use aes_gcm::{
-        Aes128Gcm,
-        aead::{AeadInPlace, KeyInit},
-    };
-    let mut key16 = [0u8; 16];
-    let n = key.len().min(16);
-    key16[..n].copy_from_slice(&key[..n]);
-    let gcm_key = match Aes128Gcm::new_from_slice(&key16) {
-        Ok(k) => k,
-        Err(_) => return [0u8; 16],
-    };
-    let nonce = aes_gcm::Nonce::from_slice(&[0u8; 12]);
-    let mut empty = [0u8; 0];
-    let tag = match gcm_key.encrypt_in_place_detached(nonce, aad, &mut empty) {
-        Ok(t) => t,
-        Err(_) => return [0u8; 16],
-    };
+// ===========================================================
+//  AES-128-GCM / AES-GMAC
+// ===========================================================
+
+/// AES-128-GCM authenticated encryption.
+/// Returns `(ciphertext, 16-byte tag)`.
+fn aes128_gcm_seal(
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Result<(Vec<u8>, [u8; 16])> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let cipher = aes_gcm::Aes128Gcm::new_from_slice(key).map_err(|_| {
+        OverthroneError::Smb(format!("AES-128-GCM: invalid key length {}", key.len()))
+    })?;
+
+    let ct_and_tag = cipher
+        .encrypt(
+            aes_gcm::Nonce::from_slice(nonce),
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM encrypt failed: {e}")))?;
+
+    if ct_and_tag.len() < 16 {
+        return Err(OverthroneError::Smb(
+            "AES-128-GCM produced a short ciphertext".to_string(),
+        ));
+    }
+    let split = ct_and_tag.len() - 16;
+    let mut tag = [0u8; 16];
+    tag.copy_from_slice(&ct_and_tag[split..]);
+    Ok((ct_and_tag[..split].to_vec(), tag))
+}
+
+/// AES-128-GCM authenticated decryption. Fails if the tag does not verify.
+fn aes128_gcm_open(
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Result<Vec<u8>> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let cipher = aes_gcm::Aes128Gcm::new_from_slice(key).map_err(|_| {
+        OverthroneError::Smb(format!("AES-128-GCM: invalid key length {}", key.len()))
+    })?;
+
+    let mut msg = Vec::with_capacity(ciphertext.len() + tag.len());
+    msg.extend_from_slice(ciphertext);
+    msg.extend_from_slice(tag);
+
+    cipher
+        .decrypt(
+            aes_gcm::Nonce::from_slice(nonce),
+            Payload { msg: &msg, aad },
+        )
+        .map_err(|e| OverthroneError::Smb(format!("AES-128-GCM: tag verification failed: {e}")))
+}
+
+/// AES-GMAC: the GCM authentication tag over `message` with an empty plaintext.
+///
+/// SMB 3.1.1 uses this for packet signing when the negotiated cipher is
+/// AES-128-GCM (MS-SMB2 §3.1.4.1) -- the `nonce` is derived from the SMB2 header
+/// MessageId and flags rather than being random.
+fn aes_gmac(key: &[u8], nonce: &[u8; 12], message: &[u8]) -> Result<[u8; 16]> {
+    use aes_gcm::aead::{Aead, KeyInit, Payload};
+    let cipher = aes_gcm::Aes128Gcm::new_from_slice(key)
+        .map_err(|_| OverthroneError::Smb(format!("AES-GMAC: invalid key length {}", key.len())))?;
+
+    let tag = cipher
+        .encrypt(
+            aes_gcm::Nonce::from_slice(nonce),
+            Payload {
+                msg: &[],
+                aad: message,
+            },
+        )
+        .map_err(|e| OverthroneError::Smb(format!("AES-GMAC failed: {e}")))?;
+
+    if tag.len() != 16 {
+        return Err(OverthroneError::Smb(format!(
+            "AES-GMAC produced a {}-byte tag, expected 16",
+            tag.len()
+        )));
+    }
     let mut out = [0u8; 16];
-    out.copy_from_slice(&tag[..]);
+    out.copy_from_slice(&tag);
+    Ok(out)
+}
+
+// ===========================================================
+//  AES-128-CCM (NIST SP 800-38C / RFC 3610)
+// ===========================================================
+
+/// Initialise an AES-128 block cipher, mapping a bad key length to an error.
+///
+/// `KeyInit` is imported anonymously here on purpose: bringing it into scope
+/// crate-wide would collide with `Mac::new_from_slice` on the HMAC/CMAC types.
+fn aes128_new(key: &[u8]) -> Result<Aes128> {
+    use aes::cipher::KeyInit as _;
+    Aes128::new_from_slice(key)
+        .map_err(|_| OverthroneError::Smb(format!("AES-128: invalid key length {}", key.len())))
+}
+
+/// Encrypt a single AES-128 block (ECB).
+fn aes128_block_encrypt(cipher: &Aes128, block: &[u8; 16]) -> [u8; 16] {
+    let mut ga = GenericArray::clone_from_slice(block);
+    cipher.encrypt_block(&mut ga);
+    let mut out = [0u8; 16];
+    out.copy_from_slice(&ga);
     out
+}
+
+const CCM_TAG_LEN: usize = 16;
+
+/// Size in bytes of the CCM length field (the `L` parameter).
+fn ccm_l(nonce: &[u8]) -> Result<usize> {
+    if !(7..=13).contains(&nonce.len()) {
+        return Err(OverthroneError::Smb(format!(
+            "AES-CCM: unsupported nonce length {} (expected 7..=13)",
+            nonce.len()
+        )));
+    }
+    Ok(15 - nonce.len())
+}
+
+/// Build the CCM `B_0` block (SP 800-38C step 2a).
+fn ccm_b0(nonce: &[u8], l: usize, tag_len: usize, aad_len: usize, msg_len: usize) -> [u8; 16] {
+    let mut b0 = [0u8; 16];
+    if aad_len > 0 {
+        b0[0] |= 0x40; // Adata flag
+    }
+    b0[0] |= (((tag_len as u8) - 2) / 2) << 3; // (t - 2) / 2
+    b0[0] |= (l as u8) - 1; // L - 1
+    b0[1..1 + nonce.len()].copy_from_slice(nonce);
+    // Q: message length, big-endian, `l` bytes wide.
+    let q = (msg_len as u64).to_be_bytes();
+    b0[16 - l..].copy_from_slice(&q[8 - l..]);
+    b0
+}
+
+/// CBC-MAC over zero-padded 16-byte blocks, chaining from `x`.
+fn ccm_cbc_mac(cipher: &Aes128, x: &mut [u8; 16], data: &[u8]) {
+    for chunk in data.chunks(16) {
+        let mut block = [0u8; 16];
+        block[..chunk.len()].copy_from_slice(chunk);
+        for (b, c) in block.iter_mut().zip(x.iter()) {
+            *b ^= *c;
+        }
+        *x = aes128_block_encrypt(cipher, &block);
+    }
+}
+
+/// Raw CCM CBC-MAC over B0 || <aad> || <msg> (before the counter-0 masking).
+fn ccm_mac(
+    cipher: &Aes128,
+    nonce: &[u8],
+    l: usize,
+    tag_len: usize,
+    aad: &[u8],
+    msg: &[u8],
+) -> [u8; 16] {
+    let b0 = ccm_b0(nonce, l, tag_len, aad.len(), msg.len());
+    let mut x = aes128_block_encrypt(cipher, &b0);
+    if !aad.is_empty() {
+        // Associated data shorter than 2^16 - 2^8 octets is prefixed with its
+        // two-byte big-endian length.
+        let mut header = Vec::with_capacity(aad.len() + 2);
+        header.extend_from_slice(&(aad.len() as u16).to_be_bytes());
+        header.extend_from_slice(aad);
+        ccm_cbc_mac(cipher, &mut x, &header);
+    }
+    ccm_cbc_mac(cipher, &mut x, msg);
+    x
+}
+
+/// One CCM counter block `A_i`.
+fn ccm_ctr_block(cipher: &Aes128, nonce: &[u8], l: usize, counter: u32) -> [u8; 16] {
+    let mut a = [0u8; 16];
+    a[0] = (l as u8) - 1;
+    a[1..1 + nonce.len()].copy_from_slice(nonce);
+    let c = (counter as u64).to_be_bytes();
+    a[16 - l..].copy_from_slice(&c[8 - l..]);
+    aes128_block_encrypt(cipher, &a)
+}
+
+/// CTR-mode keystream application with counter blocks starting at 1.
+fn ccm_ctr_crypt(cipher: &Aes128, nonce: &[u8], l: usize, data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len());
+    for (i, chunk) in data.chunks(16).enumerate() {
+        let s = ccm_ctr_block(cipher, nonce, l, i as u32 + 1);
+        for (j, b) in chunk.iter().enumerate() {
+            out.push(b ^ s[j]);
+        }
+    }
+    out
+}
+
+/// AES-CCM authenticated encryption. Returns `(ciphertext, tag)`.
+fn aes128_ccm_seal(
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+    tag_len: usize,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let cipher = aes128_new(key)?;
+    let l = ccm_l(nonce)?;
+
+    let mac = ccm_mac(&cipher, nonce, l, tag_len, aad, plaintext);
+    let s0 = ccm_ctr_block(&cipher, nonce, l, 0);
+    let tag: Vec<u8> = (0..tag_len).map(|i| mac[i] ^ s0[i]).collect();
+    let ciphertext = ccm_ctr_crypt(&cipher, nonce, l, plaintext);
+    Ok((ciphertext, tag))
+}
+
+/// AES-CCM authenticated decryption. Fails if the tag does not verify.
+fn aes128_ccm_open(
+    key: &[u8],
+    nonce: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Result<Vec<u8>> {
+    let cipher = aes128_new(key)?;
+    let l = ccm_l(nonce)?;
+    let tag_len = tag.len();
+    if !(4..=CCM_TAG_LEN).contains(&tag_len) || !tag_len.is_multiple_of(2) {
+        return Err(OverthroneError::Smb(format!(
+            "AES-128-CCM: invalid tag length {tag_len}"
+        )));
+    }
+
+    let plaintext = ccm_ctr_crypt(&cipher, nonce, l, ciphertext);
+    let mac = ccm_mac(&cipher, nonce, l, tag_len, aad, &plaintext);
+    let s0 = ccm_ctr_block(&cipher, nonce, l, 0);
+
+    // Constant-time tag comparison.
+    let mut diff = 0u8;
+    for i in 0..tag_len {
+        diff |= (mac[i] ^ s0[i]) ^ tag[i];
+    }
+    if diff != 0 {
+        return Err(OverthroneError::Smb(
+            "AES-128-CCM: authentication tag verification failed".to_string(),
+        ));
+    }
+    Ok(plaintext)
 }
 
 /// AES-128-CMAC over `data` using `key` (should be 16 bytes).  Returns 16-byte tag.
@@ -3241,6 +3866,53 @@ mod tests {
         assert_eq!(&result[..], &expected[..]);
     }
 
+    // ---- Official SMB 3.1.1 test vectors ----------------------------------
+    // Source: "SMB 3.1.1 Pre-authentication integrity in Windows 10"
+    // (Microsoft Open Specifications blog, 2015), Appendix A/B.
+    // These pin the exact KDF input formatting (label null-termination +
+    // SP800-108 separator) used by Windows, so a regression here is caught
+    // immediately instead of showing up as "signature mismatch" on a live DC.
+
+    #[test]
+    fn test_ms_smb311_signing_key_vector_gcm() {
+        // Appendix A.1: CipherId 0x0002 (AES-128-GCM)
+        let session_key = hex::decode("270E1BA896585EEB7AF3472D3B4C75A7").unwrap();
+        let preauth = hex::decode(concat!(
+            "0DD13628CC3ED218EF9DF9772D436D0887AB9814BFAE63A80AA845F36909DB79",
+            "28622DDDAD522D9751640A459762C5A9D6BB084CBB3CE6BDADEF5D5BCE3C6C01"
+        ))
+        .unwrap();
+        assert_eq!(preauth.len(), 64);
+        let signing_key = derive_signing_key(&session_key, SMB2_DIALECT_311, Some(&preauth));
+        assert_eq!(hex::encode(signing_key), "73fe7a9a77bef0bde49c650d8ccb5f76");
+    }
+
+    #[test]
+    fn test_ms_smb311_signing_key_vector_ccm() {
+        // Appendix A.2: CipherId 0x0001 (AES-128-CCM)
+        let session_key = hex::decode("FD67875E7DF37605F5A9D226991A8782").unwrap();
+        let preauth = hex::decode(concat!(
+            "BD57317658D28E7599C2491165F5D6FB36AD0AD65833774A6684D07F83EF2EBA",
+            "B8726C1D76704AF325285A70FCBAD053F39EF4C031AE67C56006C50C6D349EC6"
+        ))
+        .unwrap();
+        let signing_key = derive_signing_key(&session_key, SMB2_DIALECT_311, Some(&preauth));
+        assert_eq!(hex::encode(signing_key), "d9ae56d84460f692e15673d7ac357904");
+    }
+
+    #[test]
+    fn test_ms_smb311_signing_key_vector_preauth_only() {
+        // Appendix B: no encryption capability negotiated
+        let session_key = hex::decode("A8B3FCB8C96884BA9126132AE5B076AF").unwrap();
+        let preauth = hex::decode(concat!(
+            "CB3320852ED35231F1087E6A4828C129384F7041005FF76543B46B1590574300",
+            "B376771109C29903D0A5E6EB124A3BCA8DD9CF0FBF2EF60F2FED746A70CE0533"
+        ))
+        .unwrap();
+        let signing_key = derive_signing_key(&session_key, SMB2_DIALECT_311, Some(&preauth));
+        assert_eq!(hex::encode(signing_key), "5756ac382298721282d4d9f61cf1195f");
+    }
+
     #[test]
     fn test_sp800_108_kdf_smb_signing() {
         let session_key = [0x01u8; 16];
@@ -3257,6 +3929,288 @@ mod tests {
         let with_null = sp800_108_counter_kdf(&session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
         let without = sp800_108_counter_kdf(&session_key, b"SMBSigningKey", b"SmbSign");
         assert_ne!(with_null, without);
+    }
+
+    // ---- AES-128-CCM ------------------------------------------------------
+
+    #[test]
+    fn test_rfc3610_ccm_packet_vector_1() {
+        // RFC 3610 / NIST SP 800-38C Packet Vector #1 (AES-128, 13-byte nonce,
+        // 8-byte tag). Pins the CBC-MAC, counter-block and tag-masking steps.
+        let key = hex::decode("c0c1c2c3c4c5c6c7c8c9cacbcccdcecf").unwrap();
+        let nonce = hex::decode("00000003020100a0a1a2a3a4a5").unwrap();
+        let aad = hex::decode("0001020304050607").unwrap();
+        let plaintext = hex::decode("08090a0b0c0d0e0f101112131415161718191a1b1c1d1e").unwrap();
+
+        let (ct, tag) = aes128_ccm_seal(&key, &nonce, &aad, &plaintext, 8).unwrap();
+        let mut combined = ct.clone();
+        combined.extend_from_slice(&tag);
+        assert_eq!(
+            hex::encode(&combined),
+            "588c979a61c663d2f066d0c2c0f989806d5f6b61dac38417e8d12cfdf926e0"
+        );
+
+        // Round-trip and tamper detection.
+        assert_eq!(
+            aes128_ccm_open(&key, &nonce, &aad, &ct, &tag).unwrap(),
+            plaintext
+        );
+        let mut bad_tag = tag.clone();
+        bad_tag[0] ^= 0x01;
+        assert!(aes128_ccm_open(&key, &nonce, &aad, &ct, &bad_tag).is_err());
+    }
+
+    #[test]
+    fn test_ccm_round_trip_with_smb3_parameters() {
+        // The profile SMB 3.x actually uses: 11-byte nonce, 16-byte tag.
+        let key = [0x5Au8; 16];
+        let nonce = [0x01u8; 11];
+        let aad = [0xA5u8; 32];
+        let plaintext = b"the quick brown fox jumps over the lazy dog";
+
+        let (ct, tag) = aes128_ccm_seal(&key, &nonce, &aad, plaintext, 16).unwrap();
+        assert_eq!(ct.len(), plaintext.len());
+        assert_eq!(tag.len(), 16);
+        assert_ne!(&ct[..], &plaintext[..]);
+        assert_eq!(
+            aes128_ccm_open(&key, &nonce, &aad, &ct, &tag).unwrap(),
+            plaintext
+        );
+
+        // A changed associated data must invalidate the tag.
+        let mut bad_aad = aad;
+        bad_aad[0] ^= 0xFF;
+        assert!(aes128_ccm_open(&key, &nonce, &bad_aad, &ct, &tag).is_err());
+    }
+
+    #[test]
+    fn test_gcm_round_trip_and_tamper_detection() {
+        let key = [0x33u8; 16];
+        let nonce = [0x07u8; 12];
+        let aad = [0x11u8; 32];
+        let plaintext = b"smb3 gcm payload";
+
+        let (ct, tag) = aes128_gcm_seal(&key, &nonce, &aad, plaintext).unwrap();
+        assert_eq!(ct.len(), plaintext.len());
+        assert_eq!(
+            aes128_gcm_open(&key, &nonce, &aad, &ct, &tag).unwrap(),
+            plaintext
+        );
+
+        let mut bad_tag = tag;
+        bad_tag[15] ^= 0x01;
+        assert!(aes128_gcm_open(&key, &nonce, &aad, &ct, &bad_tag).is_err());
+    }
+
+    // ---- SMB3 Transform_Header -------------------------------------------
+
+    #[test]
+    fn test_smb3_transform_header_layout_and_round_trip() {
+        let session_id = 0x1122_3344_5566_7788u64;
+        let key = [0x42u8; 16];
+        let plaintext = b"GET / HTTP/1.1\r\n\r\n";
+
+        for cipher in [Smb3Cipher::Aes128Gcm, Smb3Cipher::Aes128Ccm] {
+            let packet = smb3_encrypt(plaintext, &key, session_id, cipher).unwrap();
+
+            assert_eq!(&packet[0..4], SMB3_TRANSFORM_MAGIC, "{}", cipher.name());
+            assert_eq!(
+                packet.len(),
+                SMB3_TRANSFORM_HEADER_SIZE + plaintext.len(),
+                "{} -- the AEAD tag belongs in the header, not after the payload",
+                cipher.name()
+            );
+            assert_eq!(
+                u32::from_le_bytes(
+                    packet[SMB3_TF_MSG_SIZE..SMB3_TF_MSG_SIZE + 4]
+                        .try_into()
+                        .unwrap()
+                ) as usize,
+                plaintext.len()
+            );
+            assert_eq!(
+                u16::from_le_bytes(packet[SMB3_TF_FLAGS..SMB3_TF_FLAGS + 2].try_into().unwrap()),
+                SMB3_TF_FLAG_ENCRYPTED
+            );
+            assert_eq!(
+                u64::from_le_bytes(
+                    packet[SMB3_TF_SESSION_ID..SMB3_TF_SESSION_ID + 8]
+                        .try_into()
+                        .unwrap()
+                ),
+                session_id
+            );
+            // The unused tail of the 16-byte Nonce field must be zero.
+            assert!(
+                packet[SMB3_TF_NONCE + cipher.nonce_len()..SMB3_TF_NONCE + 16]
+                    .iter()
+                    .all(|b| *b == 0),
+                "{} nonce padding",
+                cipher.name()
+            );
+
+            let round_tripped = smb3_decrypt(&packet, &key, cipher).unwrap();
+            assert_eq!(round_tripped, plaintext, "{}", cipher.name());
+
+            // Decrypting with the other cipher must fail loudly, not return garbage.
+            let wrong = match cipher {
+                Smb3Cipher::Aes128Gcm => Smb3Cipher::Aes128Ccm,
+                Smb3Cipher::Aes128Ccm => Smb3Cipher::Aes128Gcm,
+            };
+            assert!(smb3_decrypt(&packet, &key, wrong).is_err());
+        }
+    }
+
+    // ---- Signing ----------------------------------------------------------
+
+    /// Minimal 64-byte SMB2 header for signing tests.
+    fn synthetic_header(command: u16, message_id: u64, flags: u32) -> Vec<u8> {
+        let mut hdr = vec![0u8; SMB2_HEADER_SIZE];
+        hdr[0..4].copy_from_slice(SMB2_MAGIC);
+        hdr[4..6].copy_from_slice(&64u16.to_le_bytes());
+        hdr[12..14].copy_from_slice(&command.to_le_bytes());
+        hdr[16..20].copy_from_slice(&flags.to_le_bytes());
+        hdr[24..32].copy_from_slice(&message_id.to_le_bytes());
+        hdr
+    }
+
+    #[test]
+    fn test_aes_gmac_is_nonce_sensitive() {
+        let key = [0x11u8; 16];
+        let msg = b"a signed SMB2 packet";
+        let n1 = [0u8; 12];
+        let mut n2 = [0u8; 12];
+        n2[0] = 1;
+
+        let t1 = aes_gmac(&key, &n1, msg).unwrap();
+        assert_eq!(t1, aes_gmac(&key, &n1, msg).unwrap());
+        assert_ne!(t1, aes_gmac(&key, &n2, msg).unwrap());
+    }
+
+    #[test]
+    fn test_gmac_nonce_encodes_message_id_and_flags() {
+        let hdr = synthetic_header(SMB2_TREE_CONNECT, 0x0102_0304_0506_0708, 0);
+        let nonce = Smb2Connection::gmac_nonce(&hdr);
+        assert_eq!(&nonce[..8], &0x0102_0304_0506_0708u64.to_le_bytes());
+        assert_eq!(&nonce[8..], &[0u8; 4]);
+
+        // Server response: Flags = SERVER_TO_REDIR (0x01) | SIGNED (0x08) = 0x09.
+        // The nonce MUST use the full Flags field, not a masked version.
+        let hdr = synthetic_header(
+            SMB2_TREE_CONNECT,
+            1,
+            SMB2_FLAGS_SERVER_TO_REDIR | SMB2_FLAGS_SIGNED,
+        );
+        let nonce = Smb2Connection::gmac_nonce(&hdr);
+        assert_eq!(
+            u32::from_le_bytes(nonce[8..].try_into().unwrap()),
+            SMB2_FLAGS_SERVER_TO_REDIR | SMB2_FLAGS_SIGNED
+        );
+
+        // CANCEL request with ASYNC flag set in the header.
+        let hdr = synthetic_header(
+            SMB2_CANCEL,
+            1,
+            SMB2_FLAGS_SERVER_TO_REDIR | SMB2_FLAGS_ASYNC,
+        );
+        let nonce = Smb2Connection::gmac_nonce(&hdr);
+        assert_eq!(
+            u32::from_le_bytes(nonce[8..].try_into().unwrap()),
+            SMB2_FLAGS_SERVER_TO_REDIR | SMB2_FLAGS_ASYNC
+        );
+    }
+
+    #[test]
+    fn test_smb311_signing_uses_gmac_not_cmac() {
+        let session_key = [0x77u8; 16];
+        let preauth = [0x88u8; 64];
+        let message_id = 42;
+
+        let mut gmac_pkt = synthetic_header(SMB2_TREE_CONNECT, message_id, 0);
+        let mut cmac_pkt = gmac_pkt.clone();
+
+        Smb2Connection::sign_packet(
+            &mut gmac_pkt,
+            &session_key,
+            SMB2_DIALECT_311,
+            Some(&preauth),
+            true,
+        )
+        .unwrap();
+        Smb2Connection::sign_packet(
+            &mut cmac_pkt,
+            &session_key,
+            SMB2_DIALECT_311,
+            Some(&preauth),
+            false,
+        )
+        .unwrap();
+
+        // GCM-negotiated sessions must not be signed with CMAC -- using the wrong
+        // algorithm is what makes Windows reject the request outright.
+        assert_ne!(&gmac_pkt[48..64], &cmac_pkt[48..64]);
+        assert_ne!(&gmac_pkt[48..64], &[0u8; 16]);
+
+        // Sign/verify round trip for both algorithms.
+        assert!(Smb2Connection::verify_packet(
+            &gmac_pkt,
+            &session_key,
+            SMB2_DIALECT_311,
+            true,
+            Some(&preauth),
+            true
+        ));
+        assert!(Smb2Connection::verify_packet(
+            &cmac_pkt,
+            &session_key,
+            SMB2_DIALECT_311,
+            true,
+            Some(&preauth),
+            false
+        ));
+        // Verifying with the wrong algorithm must fail.
+        assert!(!Smb2Connection::verify_packet(
+            &gmac_pkt,
+            &session_key,
+            SMB2_DIALECT_311,
+            true,
+            Some(&preauth),
+            false
+        ));
+    }
+
+    #[test]
+    fn test_smb3_0x_signing_still_uses_cmac() {
+        let session_key = [0x21u8; 16];
+        let mut pkt = synthetic_header(SMB2_TREE_CONNECT, 7, 0);
+        // SMB 3.0.2 has no cipher negotiation: AES-128-CCM and AES-128-CMAC always.
+        Smb2Connection::sign_packet(&mut pkt, &session_key, SMB2_DIALECT_302, None, false).unwrap();
+        assert!(Smb2Connection::verify_packet(
+            &pkt,
+            &session_key,
+            SMB2_DIALECT_302,
+            true,
+            None,
+            false
+        ));
+    }
+
+    #[test]
+    fn test_smb3_0x_encryption_key_labels() {
+        // The 3.0.x label/context pair is what Windows and impacket use; a
+        // regression to the 3.1.1 labels would silently break every encrypted
+        // SMB 3.0.2 session.
+        let session_key = [0x09u8; 16];
+        let c2s = derive_smb3_encryption_key(&session_key, false, None, SMB2_DIALECT_302);
+        let s2c = derive_smb3_encryption_key(&session_key, true, None, SMB2_DIALECT_302);
+        assert_eq!(c2s.len(), 16);
+        assert_eq!(s2c.len(), 16);
+        assert_ne!(c2s, s2c, "directions must use different KDF contexts");
+
+        let expected_c2s = sp800_108_counter_kdf(&session_key, b"SMB2AESCCM\x00", b"ServerOut\x00");
+        let expected_s2c = sp800_108_counter_kdf(&session_key, b"SMB2AESCCM\x00", b"ServerIn \x00");
+        assert_eq!(c2s, expected_c2s);
+        assert_eq!(s2c, expected_s2c);
     }
 
     #[test]

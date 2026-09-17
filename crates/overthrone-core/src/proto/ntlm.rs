@@ -14,6 +14,143 @@ use md5::Md5;
 type HmacMd5 = Hmac<Md5>;
 
 // ===========================================================
+// Negotiate flags (MS-NLMP 2.2.2.5)
+// ===========================================================
+
+/// Requests Unicode encoding for the payload strings.
+pub const NTLMSSP_NEGOTIATE_UNICODE: u32 = 0x0000_0001;
+/// Requests that the server supply a TargetName in the CHALLENGE.
+pub const NTLMSSP_REQUEST_TARGET: u32 = 0x0000_0004;
+/// Requests per-message signing (integrity).
+pub const NTLMSSP_NEGOTIATE_SIGN: u32 = 0x0000_0010;
+/// Requests message confidentiality (RC4 sealing of the payload).
+pub const NTLMSSP_NEGOTIATE_SEAL: u32 = 0x0000_0020;
+/// NTLM authentication.
+pub const NTLMSSP_NEGOTIATE_NTLM: u32 = 0x0000_0200;
+/// Forces a signature block on every message.
+pub const NTLMSSP_NEGOTIATE_ALWAYS_SIGN: u32 = 0x0000_8000;
+/// NTLM2 session security (a.k.a. extended session security).
+pub const NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY: u32 = 0x0008_0000;
+/// The CHALLENGE carries the TargetInfo AV_PAIR list.
+pub const NTLMSSP_NEGOTIATE_TARGET_INFO: u32 = 0x0080_0000;
+/// The optional 8-byte Version field is present in all three messages.
+pub const NTLMSSP_NEGOTIATE_VERSION: u32 = 0x0200_0000;
+/// 128-bit session keys.
+pub const NTLMSSP_NEGOTIATE_128: u32 = 0x2000_0000;
+/// Explicit key exchange: the client picks ExportedSessionKey and ships it
+/// RC4-encrypted in the AUTHENTICATE message (MS-NLMP 3.1.5.2).
+pub const NTLMSSP_NEGOTIATE_KEY_EXCH: u32 = 0x4000_0000;
+/// 56-bit session keys.
+pub const NTLMSSP_NEGOTIATE_56: u32 = 0x8000_0000;
+/// The client
+/// supplied an OEM domain name in the NEGOTIATE message.
+pub const NTLMSSP_NEGOTIATE_OEM_DOMAIN_SUPPLIED: u32 = 0x0000_1000;
+
+/// The flags a Windows client sends when it wants integrity + confidentiality.
+/// This is the same set impacket/NXC use for `getNTLMSSPType1(signingRequired=True)`.
+pub const NTLMSSP_CLIENT_FLAGS: u32 = NTLMSSP_NEGOTIATE_UNICODE
+    | NTLMSSP_REQUEST_TARGET
+    | NTLMSSP_NEGOTIATE_SIGN
+    | NTLMSSP_NEGOTIATE_SEAL
+    | NTLMSSP_NEGOTIATE_NTLM
+    | NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+    | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+    | NTLMSSP_NEGOTIATE_TARGET_INFO
+    | NTLMSSP_NEGOTIATE_128
+    | NTLMSSP_NEGOTIATE_KEY_EXCH
+    | NTLMSSP_NEGOTIATE_56;
+
+// ===========================================================
+// AV_PAIR identifiers (MS-NLMP 2.2.2.1)
+// ===========================================================
+
+/// MsvAvEOL -- end of the AV_PAIR list.
+pub const MSV_AV_EOL: u16 = 0x0000;
+/// MsvAvNbComputerName -- the server's NetBIOS name.
+pub const MSV_AV_NB_COMPUTER_NAME: u16 = 0x0001;
+/// MsvAvNbDomainName -- the NetBIOS domain name (this is the *authoritative*
+/// domain string for the NTLMv2 key derivation, see `ntlmv2_hash`).
+pub const MSV_AV_NB_DOMAIN_NAME: u16 = 0x0002;
+/// MsvAvDnsComputerName -- the server's FQDN.
+pub const MSV_AV_DNS_COMPUTER_NAME: u16 = 0x0003;
+/// MsvAvDnsDomainName -- the DNS domain name.
+pub const MSV_AV_DNS_DOMAIN_NAME: u16 = 0x0004;
+/// MsvAvDnsTreeName -- the DNS forest name.
+pub const MSV_AV_DNS_TREE_NAME: u16 = 0x0005;
+/// MsvAvFlags -- client/server capability flags.
+pub const MSV_AV_FLAGS: u16 = 0x0006;
+/// MsvAvTimestamp -- the server's FILETIME, echoed back by the client.
+pub const MSV_AV_TIMESTAMP: u16 = 0x0007;
+/// MsvAvSingleHost -- restrictions imposed by the client.
+pub const MSV_AV_SINGLE_HOST: u16 = 0x0008;
+/// MsvAvTargetName -- the SPN the client believes it is talking to.
+/// Windows rejects the logon (or logs an event) when the target enforces
+/// "Restrict NTLM: Add server SPN" and this AV_PAIR is absent or wrong.
+pub const MSV_AV_TARGET_NAME: u16 = 0x0009;
+/// MsvAvChannelBindings -- RFC 5929 channel binding hash (EPA).
+pub const MSV_AV_CHANNEL_BINDINGS: u16 = 0x000A;
+/// MsvAvFlags bit 0: a MIC is present in the AUTHENTICATE message.
+pub const MSV_AV_FLAGS_MIC_PRESENT: u32 = 0x0000_0001;
+
+// ===========================================================
+// AV_PAIR helpers
+// ===========================================================
+
+/// Decode a TargetInfo blob into its AV_PAIR list.
+pub fn parse_av_pairs(target_info: &[u8]) -> Vec<(u16, Vec<u8>)> {
+    let mut pairs = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= target_info.len() {
+        let av_id = u16::from_le_bytes([target_info[pos], target_info[pos + 1]]);
+        let av_len = u16::from_le_bytes([target_info[pos + 2], target_info[pos + 3]]) as usize;
+        pos += 4;
+        if av_id == MSV_AV_EOL {
+            break;
+        }
+        if pos + av_len > target_info.len() {
+            break;
+        }
+        pairs.push((av_id, target_info[pos..pos + av_len].to_vec()));
+        pos += av_len;
+    }
+    pairs
+}
+
+/// Serialise an AV_PAIR list, always terminating with MsvAvEOL.
+pub fn serialize_av_pairs(pairs: &[(u16, Vec<u8>)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for (id, value) in pairs {
+        if *id == MSV_AV_EOL {
+            continue;
+        }
+        let len = value.len().min(u16::MAX as usize) as u16;
+        out.extend_from_slice(&id.to_le_bytes());
+        out.extend_from_slice(&len.to_le_bytes());
+        out.extend_from_slice(&value[..len as usize]);
+    }
+    out.extend_from_slice(&MSV_AV_EOL.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes());
+    out
+}
+
+/// Insert or replace an AV_PAIR in a list (preserving the original ordering).
+pub fn set_av_pair(pairs: &mut Vec<(u16, Vec<u8>)>, id: u16, value: &[u8]) {
+    if let Some(slot) = pairs.iter_mut().find(|(k, _)| *k == id) {
+        slot.1 = value.to_vec();
+    } else {
+        pairs.push((id, value.to_vec()));
+    }
+}
+
+/// Look up a single AV_PAIR value.
+pub fn get_av_pair(target_info: &[u8], id: u16) -> Option<Vec<u8>> {
+    parse_av_pairs(target_info)
+        .into_iter()
+        .find(|(k, _)| *k == id)
+        .map(|(_, v)| v)
+}
+
+// ===========================================================
 // NT Hash -- MD4(UTF-16LE(password))
 // ===========================================================
 
@@ -41,11 +178,20 @@ pub fn nt_hash_hex(password: &str) -> String {
 // ===========================================================
 
 /// Compute the NTLMv2 hash (also called the "NTLMv2 OWF").
-/// Formula: HMAC-MD5(NT_HASH, UTF-16LE(UPPER(username) + UPPER(domain)))
-/// This is used as the key for computing NTLMv2 challenge responses
-/// and session keys. Reference: [MS-NLMP] Section 3.3.2
+///
+/// Formula: `HMAC-MD5(NTOWFv1, UTF-16LE(UPPER(username) + domain))`.
+///
+/// Only the **user name** is upper-cased. The user domain is used exactly as
+/// supplied -- [MS-NLMP 3.3.2] defines `UserDom` as the value from the
+/// CHALLENGE's `MsvAvNbDomainName` (`NetBIOS` name, upper case by convention)
+/// or, for local accounts, the server's computer name. Upper-casing it here
+/// would silently produce a different key whenever the DC reports a domain
+/// whose case differs from what the caller passed (e.g. `LAINOSCP` vs
+/// `lainoscp.local`), which shows up as rc=49 invalidCredentials.
+///
+/// Reference: [MS-NLMP] Section 3.3.2
 pub fn ntlmv2_hash(nt_hash: &[u8], username: &str, domain: &str) -> Vec<u8> {
-    let identity = format!("{}{}", username.to_uppercase(), domain.to_uppercase());
+    let identity = format!("{}{}", username.to_uppercase(), domain);
     let identity_utf16: Vec<u8> = identity
         .encode_utf16()
         .flat_map(|c| c.to_le_bytes())
@@ -284,74 +430,111 @@ pub struct NtlmChallengeMessage {
     pub flags: u32,
 }
 
-/// Build NTLM Type 1 (Negotiate) message
+/// NTLM message version emitted when `NEGOTIATE_VERSION` is set
+/// (Windows 10 21H1, 10.0.19043, revision 15).
+const NTLM_VERSION: [u8; 8] = [0x0a, 0x00, 0x43, 0x1d, 0x00, 0x00, 0x00, 0x0f];
+
+/// Build NTLM Type 1 (NEGOTIATE) message.
+///
 /// This message is sent from client to server to initiate NTLM authentication.
+/// The flags are the full Windows client set (`NTLMSSP_CLIENT_FLAGS`), i.e.
+/// signing, sealing and key exchange are requested -- which is exactly what
+/// LDAP signing and SMB2 signing need.
+///
+/// The wire layout is fixed by [MS-NLMP 2.2.1.1]; `NegotiateFlags` comes
+/// immediately after `MessageType`, *before* the two `SecBuffer` fields. The
+/// optional DomainName field is only emitted when `domain` is non-empty, and
+/// the payload offsets account for the (optional) Version field so the two
+/// never overlap:
+///
+/// ```text
+/// [0..8)   Signature        [16..18) DomainName.Len
+/// [8..12)  MessageType      [18..20) DomainName.MaxLen
+/// [12..16) NegotiateFlags   [20..24) DomainName.BufferOffset
+/// [24..26) Workstation.Len  [26..28) Workstation.MaxLen
+/// [28..32) Workstation.BufferOffset
+/// [32..40) Version (optional)
+/// [40..)   Payload (DomainName)
+/// ```
+///
+/// Ordering matters: Windows' AcceptSecurityContext reads the flag word from
+/// offset 12 unconditionally. Emitting the `SecBuffer` fields first makes it
+/// parse them as flags and reject the context with `data 57`
+/// (ERROR_INVALID_PARAMETER) -- which is exactly what an LDAP SASL bind
+/// surfaced as `rc=49`.
 pub fn build_negotiate_message(domain: &str) -> Vec<u8> {
-    let mut msg = Vec::new();
+    build_negotiate_message_ex(domain, false)
+}
 
-    // Signature
+/// Build a NTLM Type 1 (NEGOTIATE) message, optionally advertising
+/// `NEGOTIATE_VERSION`.
+///
+/// Advertising a version obliges the client to also send a MIC in the
+/// AUTHENTICATE message ([MS-NLMP 2.2.2.1] Version/MIC presence rules); callers
+/// that set `include_version` must therefore build the Type 3 with
+/// [`build_authenticate_message_full`] and pass the raw NEGOTIATE/CHALLENGE
+/// bytes so the MIC can be computed.
+pub fn build_negotiate_message_ex(domain: &str, include_version: bool) -> Vec<u8> {
+    let mut flags = NTLMSSP_CLIENT_FLAGS;
+    if include_version {
+        flags |= NTLMSSP_NEGOTIATE_VERSION;
+    }
+    build_negotiate_message_with_flags(domain, flags)
+}
+
+/// Build a NTLM Type 1 (NEGOTIATE) message with an explicit flag set.
+///
+/// Exposed so callers (and tests) can probe exactly which capabilities a server
+/// accepts. The `NEGOTIATE_VERSION` bit and the payload offsets are kept
+/// consistent automatically.
+pub fn build_negotiate_message_with_flags(domain: &str, flags: u32) -> Vec<u8> {
+    let include_version = flags & NTLMSSP_NEGOTIATE_VERSION != 0;
+
+    // The DomainName field is only emitted when the caller asks for it. Note it
+    // is UTF-16LE, so `NEGOTIATE_OEM_DOMAIN_SUPPLIED` is deliberately never set:
+    // that flag tells the server to read the field as the OEM code page, and a
+    // mismatch makes Windows fail the context with ERROR_INVALID_PARAMETER.
+    let domain_utf16: Vec<u8> = domain
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+
+    // Payload starts after the fixed header plus the optional Version field.
+    let header_len: u32 = if include_version { 40 } else { 32 };
+    let domain_offset: u32 = if domain_utf16.is_empty() {
+        0
+    } else {
+        header_len
+    };
+    // The length fields count payload bytes and exclude any NUL terminator --
+    // the payload itself carries no terminator (matches impacket/Windows).
+    let domain_len: u16 = domain_utf16.len() as u16;
+
+    let mut msg = Vec::with_capacity(header_len as usize + domain_utf16.len());
+
+    // Signature + message type
     msg.extend_from_slice(NTLM_SIGNATURE);
-
-    // Message type (Type 1 = Negotiate)
     msg.extend_from_slice(&1u32.to_le_bytes());
 
-    // NTLM negotiate flags -- full set for WS2022/WS2025 compliance.
-    // Includes NEGOTIATE_SIGN (0x10), NEGOTIATE_SEAL (0x20), NEGOTIATE_128 (0x20000000),
-    // NEGOTIATE_56 (0x80000000), and NEGOTIATE_KEY_EXCH (0x40000000) so the server can
-    // negotiate signing, sealing, and 128-bit keys.  WS2025 DCs reject connections that
-    // only offer 56-bit or weaker NTLM flags.
-    // Flags matching Impacket/nxc NTLM Negotiate:
-    // - NEGOTIATE_TARGET_INFO: server must include TargetInfo in CHALLENGE
-    // - NEGOTIATE_VERSION: client supports OS version in messages
-    // - NEGOTIATE_OEM REMOVED: causes encoding mismatch with some servers
-    //   that respond in OEM when NEGOTIATE_UNICODE is also set
-    let flags: u32 = 0x0000_0001   // NEGOTIATE_UNICODE
-        | 0x0000_0010              // NEGOTIATE_SIGN
-        | 0x0000_0020              // NEGOTIATE_SEAL
-        | 0x0000_0200              // NEGOTIATE_NTLM
-        | 0x0000_8000              // NEGOTIATE_ALWAYS_SIGN
-        | 0x0008_0000              // NEGOTIATE_EXTENDED_SESSIONSECURITY
-        | 0x0080_0000              // NEGOTIATE_TARGET_INFO
-        | 0x0002_0000              // REQUEST_TARGET
-        | 0x0200_0000              // NEGOTIATE_VERSION
-        | 0x2000_0000              // NEGOTIATE_128
-        | 0x4000_0000              // NEGOTIATE_KEY_EXCH
-        | 0x8000_0000; // NEGOTIATE_56
+    // NegotiateFlags -- MUST sit at offset 12 (MS-NLMP 2.2.1.1).
     msg.extend_from_slice(&flags.to_le_bytes());
 
-    // Domain name (optional, we'll include if provided)
-    if !domain.is_empty() {
-        let domain_utf16: Vec<u8> = domain
-            .to_uppercase()
-            .encode_utf16()
-            .flat_map(|c| c.to_le_bytes())
-            .collect();
+    // DomainNameFields (Len, MaxLen, BufferOffset)
+    msg.extend_from_slice(&domain_len.to_le_bytes());
+    msg.extend_from_slice(&domain_len.to_le_bytes());
+    msg.extend_from_slice(&domain_offset.to_le_bytes());
 
-        // Domain length and offset
-        msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
-        msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes()); // Max length
-        msg.extend_from_slice(&32u32.to_le_bytes()); // Offset after header
+    // WorkstationFields -- Windows clients never populate this in a Type 1
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    msg.extend_from_slice(&0u16.to_le_bytes());
+    msg.extend_from_slice(&0u32.to_le_bytes());
 
-        // Workstation (empty)
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        msg.extend_from_slice(&0u16.to_le_bytes());
-        msg.extend_from_slice(&32u32.to_le_bytes());
-
-        // Payload
-        msg.extend_from_slice(&domain_utf16);
-    } else {
-        // Empty domain and workstation
-        msg.extend_from_slice(&0u16.to_le_bytes()); // Domain length
-        msg.extend_from_slice(&0u16.to_le_bytes()); // Domain max
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Domain offset
-        msg.extend_from_slice(&0u16.to_le_bytes()); // Workstation length
-        msg.extend_from_slice(&0u16.to_le_bytes()); // Workstation max
-        msg.extend_from_slice(&0u32.to_le_bytes()); // Workstation offset
+    // Optional Version -- must sit at offset 32, *before* the payload.
+    if include_version {
+        msg.extend_from_slice(&NTLM_VERSION);
     }
 
-    // Version (Windows 7.1 = 6.1 = 0x0601)
-    msg.extend_from_slice(&[0x06, 0x01, 0xB1, 0x1D, 0x00, 0x00, 0x00, 0x0F]);
-
+    msg.extend_from_slice(&domain_utf16);
     msg
 }
 
@@ -443,8 +626,70 @@ pub fn hmac_md5(key: &[u8], message: &[u8]) -> Vec<u8> {
     mac.finalize().into_bytes().to_vec()
 }
 
-/// Build NTLM Type 3 (Authenticate) message
-/// This message contains the proof of identity using the NTLMv2 response.
+/// Options controlling how an NTLMv2 AUTHENTICATE message is built.
+#[derive(Debug, Clone, Default)]
+pub struct NtlmAuthConfig<'a> {
+    /// Service name used to synthesise the `MsvAvTargetName` AV_PAIR, e.g.
+    /// `"ldap"` or `"cifs"`. Required when the target enforces SPN target name
+    /// validation ("Restrict NTLM: Add server SPN"). The SPN is built from the
+    /// `MsvAvDnsComputerName` the server itself supplied, so it always matches
+    /// the DC's own `dnsHostName`.
+    pub service: Option<&'a str>,
+    /// Raw NEGOTIATE message -- required to compute the MIC.
+    pub negotiate_message: Option<&'a [u8]>,
+    /// Raw CHALLENGE message -- required to compute the MIC.
+    pub challenge_message: Option<&'a [u8]>,
+    /// Emit NEGOTIATE_VERSION (and therefore the MIC) in the AUTHENTICATE.
+    pub include_version: bool,
+    /// Perform the explicit key exchange: generate a random
+    /// `ExportedSessionKey` and ship it RC4-encrypted in the
+    /// EncryptedRandomSessionKey field ([MS-NLMP 3.1.5.2]).
+    pub key_exchange: bool,
+    /// Override the random `ChallengeFromClient` nonce. Used when the session
+    /// key must be recomputed for an AUTHENTICATE message that is already on
+    /// the wire.
+    pub client_challenge: Option<[u8; 8]>,
+}
+
+/// A fully built NTLMv2 AUTHENTICATE message plus the keys it establishes.
+#[derive(Debug, Clone)]
+pub struct NtlmAuthenticate {
+    /// The wire bytes of the Type 3 message.
+    pub message: Vec<u8>,
+    /// `ExportedSessionKey` -- THE key used for signing/sealing every
+    /// subsequent message ([MS-NLMP 3.1.5.2]).
+    pub exported_session_key: Vec<u8>,
+    /// `KeyExchangeKey` (NTLMv2: identical to `SessionBaseKey`).
+    pub key_exchange_key: Vec<u8>,
+    /// Flags actually written into the AUTHENTICATE message.
+    pub flags: u32,
+    /// Flags the server returned in its CHALLENGE message.
+    pub challenge_flags: u32,
+    /// The random client nonce used in the NTLMv2 blob.
+    pub client_challenge: [u8; 8],
+    /// TargetInfo (AV_PAIRs) echoed back to the server.
+    pub target_info: Vec<u8>,
+    /// The MIC that was embedded, when one was computed.
+    pub mic: Option<Vec<u8>>,
+}
+
+impl NtlmAuthenticate {
+    /// True when the negotiated flags enable per-message signing.
+    pub fn signing_enabled(&self) -> bool {
+        self.flags & NTLMSSP_NEGOTIATE_SIGN != 0 || self.flags & NTLMSSP_NEGOTIATE_ALWAYS_SIGN != 0
+    }
+
+    /// True when the negotiated flags enable confidentiality (RC4 sealing).
+    pub fn sealing_enabled(&self) -> bool {
+        self.flags & NTLMSSP_NEGOTIATE_SEAL != 0
+    }
+}
+
+/// Build NTLM Type 3 (AUTHENTICATE) message with the full Windows flag set.
+///
+/// The response flags are the intersection of what the client offered and what
+/// the server echoed back, which is what Windows clients do. The session key is
+/// returned so callers can sign/seal subsequent traffic.
 pub fn build_authenticate_message(
     domain: &str,
     username: &str,
@@ -453,103 +698,227 @@ pub fn build_authenticate_message(
     target_info: Option<&[u8]>,
     _password: Option<&str>,
 ) -> Vec<u8> {
-    let mut msg = Vec::new();
+    let cfg = NtlmAuthConfig {
+        key_exchange: true,
+        ..Default::default()
+    };
+    build_authenticate_message_full(
+        domain,
+        username,
+        nt_hash,
+        server_challenge,
+        target_info,
+        NTLMSSP_CLIENT_FLAGS,
+        NTLMSSP_CLIENT_FLAGS,
+        &cfg,
+    )
+    .message
+}
 
-    // Compute NTLMv2 hash
+/// Build an NTLMv2 AUTHENTICATE message, returning the wire bytes *and* the
+/// session key needed to sign/seal the connection.
+///
+/// `negotiate_flags` are the flags sent in the NEGOTIATE message and
+/// `challenge_flags` the flags the server returned; the resulting message
+/// carries `negotiate_flags` with the capabilities the server did not offer
+/// cleared (matching Windows and impacket).
+#[allow(clippy::too_many_arguments)]
+pub fn build_authenticate_message_full(
+    domain: &str,
+    username: &str,
+    nt_hash: &[u8],
+    server_challenge: &[u8; 8],
+    target_info: Option<&[u8]>,
+    negotiate_flags: u32,
+    challenge_flags: u32,
+    cfg: &NtlmAuthConfig<'_>,
+) -> NtlmAuthenticate {
     let ntlmv2_h = ntlmv2_hash(nt_hash, username, domain);
-
-    // Generate random client challenge
-    let client_challenge: [u8; 8] = rand::random();
-
-    // Build client blob
+    let client_challenge: [u8; 8] = cfg.client_challenge.unwrap_or_else(rand::random);
     let timestamp = windows_filetime_now();
-    let target_info_bytes = target_info.unwrap_or(&[]);
-    let client_blob = build_ntlmv2_client_blob(timestamp, &client_challenge, target_info_bytes);
 
-    // Compute NTLMv2 response
+    // -- TargetInfo: echo the server's AV_PAIRs back, refreshing the timestamp
+    // and (optionally) adding MsvAvTargetName for SPN validation.
+    let mut av_pairs = target_info.map(parse_av_pairs).unwrap_or_default();
+    // Refresh the timestamp when we are synthesising a SPN (the server needs a
+    // fresh one for replay protection), or when the server's TargetInfo already
+    // carried one.
+    if cfg.service.is_some() || av_pairs.iter().any(|(id, _)| *id == MSV_AV_TIMESTAMP) {
+        set_av_pair(&mut av_pairs, MSV_AV_TIMESTAMP, &timestamp.to_le_bytes());
+    }
+    if let Some(service) = cfg.service
+        && let Some(dns_host) = av_pairs
+            .iter()
+            .find(|(id, _)| *id == MSV_AV_DNS_COMPUTER_NAME)
+            .map(|(_, v)| v.clone())
+    {
+        // "ldap/" + the server's own dnsHostName, as UTF-16LE.
+        let mut spn: Vec<u8> = format!("{service}/")
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        spn.extend_from_slice(&dns_host);
+        set_av_pair(&mut av_pairs, MSV_AV_TARGET_NAME, &spn);
+    }
+    let target_info_out = serialize_av_pairs(&av_pairs);
+
+    // -- NTLMv2 challenge/response ([MS-NLMP 3.3.2])
+    let client_blob = build_ntlmv2_client_blob(timestamp, &client_challenge, &target_info_out);
     let nt_response = ntlmv2_response(&ntlmv2_h, server_challenge, &client_blob);
-
-    // Compute LMv2 response
     let lm_response = lmv2_response(&ntlmv2_h, server_challenge, &client_challenge);
+    let session_base_key = ntlmv2_session_base_key(&ntlmv2_h, &nt_response[..16]);
+    // KeyExchangeKey: for NTLMv2 this is the SessionBaseKey ([MS-NLMP 3.4.5.3]).
+    let key_exchange_key = session_base_key.clone();
 
-    // Convert domain and username to UTF-16LE
-    let domain_utf16: Vec<u8> = domain
-        .to_uppercase()
-        .encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
+    // -- Response flags: everything we offered that the server echoed back.
+    let mut response_flags = negotiate_flags;
+    for bit in [
+        NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY,
+        NTLMSSP_NEGOTIATE_128,
+        NTLMSSP_NEGOTIATE_KEY_EXCH,
+        NTLMSSP_NEGOTIATE_SEAL,
+        NTLMSSP_NEGOTIATE_SIGN,
+        NTLMSSP_NEGOTIATE_ALWAYS_SIGN,
+    ] {
+        if challenge_flags & bit == 0 {
+            response_flags &= !bit;
+        }
+    }
 
-    let username_utf16: Vec<u8> = username
-        .encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
+    // -- Session key ([MS-NLMP 3.1.5.2])
+    let do_key_exchange = cfg.key_exchange && challenge_flags & NTLMSSP_NEGOTIATE_KEY_EXCH != 0;
+    let (exported_session_key, encrypted_random_session_key) = if do_key_exchange {
+        let rand_key: [u8; 16] = rand::random();
+        let enc = crate::crypto::rc4_util::rc4_crypt(&key_exchange_key, &rand_key);
+        (rand_key.to_vec(), Some(enc))
+    } else {
+        // No key exchange: the exported session key *is* the key exchange key.
+        response_flags &= !NTLMSSP_NEGOTIATE_KEY_EXCH;
+        (key_exchange_key.clone(), None)
+    };
 
-    let workstation_utf16: Vec<u8> = "WORKSTATION"
-        .encode_utf16()
-        .flat_map(|c| c.to_le_bytes())
-        .collect();
+    // -- Layout. Base header 64 bytes; Version (+8) and MIC (+16) follow it,
+    // both before the payload ([MS-NLMP 2.2.1.3]).
+    let domain_utf16 = utf16le(domain);
+    let username_utf16 = utf16le(username);
+    let workstation_utf16 = utf16le("");
+    let include_mic = cfg.include_version;
+    let mut header_size = 64u32;
+    if cfg.include_version {
+        header_size += 8;
+    }
+    if include_mic {
+        header_size += 16;
+    }
 
-    // Calculate offsets
-    let header_size = 64u32; // Base header
-    let domain_offset = header_size;
+    // Lengths in the Type 3 header are plain byte counts of the payload fields;
+    // no NUL terminators are appended ([MS-NLMP 2.2.1.3]).
+    let field_len = |bytes: &[u8]| -> u16 { bytes.len() as u16 };
+
+    let lm_offset = header_size;
+    let nt_offset = lm_offset + lm_response.len() as u32;
+    let domain_offset = nt_offset + nt_response.len() as u32;
     let username_offset = domain_offset + domain_utf16.len() as u32;
     let workstation_offset = username_offset + username_utf16.len() as u32;
-    let lm_offset = workstation_offset + workstation_utf16.len() as u32;
-    let nt_offset = lm_offset + lm_response.len() as u32;
+    let session_key_offset = workstation_offset + workstation_utf16.len() as u32;
 
-    // Build message
-    // Signature
+    let mut msg = Vec::with_capacity(session_key_offset as usize + 16);
     msg.extend_from_slice(NTLM_SIGNATURE);
-
-    // Message type (Type 3 = Authenticate)
     msg.extend_from_slice(&3u32.to_le_bytes());
 
-    // LM response
+    // LmChallengeResponseFields
     msg.extend_from_slice(&(lm_response.len() as u16).to_le_bytes());
     msg.extend_from_slice(&(lm_response.len() as u16).to_le_bytes());
     msg.extend_from_slice(&lm_offset.to_le_bytes());
 
-    // NT response
+    // NtChallengeResponseFields
     msg.extend_from_slice(&(nt_response.len() as u16).to_le_bytes());
     msg.extend_from_slice(&(nt_response.len() as u16).to_le_bytes());
     msg.extend_from_slice(&nt_offset.to_le_bytes());
 
-    // Domain
-    msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
-    msg.extend_from_slice(&(domain_utf16.len() as u16).to_le_bytes());
+    // DomainNameFields
+    msg.extend_from_slice(&field_len(&domain_utf16).to_le_bytes());
+    msg.extend_from_slice(&field_len(&domain_utf16).to_le_bytes());
     msg.extend_from_slice(&domain_offset.to_le_bytes());
 
-    // Username
-    msg.extend_from_slice(&(username_utf16.len() as u16).to_le_bytes());
-    msg.extend_from_slice(&(username_utf16.len() as u16).to_le_bytes());
+    // UserNameFields
+    msg.extend_from_slice(&field_len(&username_utf16).to_le_bytes());
+    msg.extend_from_slice(&field_len(&username_utf16).to_le_bytes());
     msg.extend_from_slice(&username_offset.to_le_bytes());
 
-    // Workstation
-    msg.extend_from_slice(&(workstation_utf16.len() as u16).to_le_bytes());
-    msg.extend_from_slice(&(workstation_utf16.len() as u16).to_le_bytes());
+    // WorkstationFields
+    msg.extend_from_slice(&field_len(&workstation_utf16).to_le_bytes());
+    msg.extend_from_slice(&field_len(&workstation_utf16).to_le_bytes());
     msg.extend_from_slice(&workstation_offset.to_le_bytes());
 
-    // Session key (empty)
-    msg.extend_from_slice(&0u16.to_le_bytes());
-    msg.extend_from_slice(&0u16.to_le_bytes());
-    msg.extend_from_slice(&0u32.to_le_bytes());
+    // EncryptedRandomSessionKeyFields
+    match &encrypted_random_session_key {
+        Some(key) => {
+            msg.extend_from_slice(&(key.len() as u16).to_le_bytes());
+            msg.extend_from_slice(&(key.len() as u16).to_le_bytes());
+            msg.extend_from_slice(&session_key_offset.to_le_bytes());
+        }
+        None => {
+            msg.extend_from_slice(&0u16.to_le_bytes());
+            msg.extend_from_slice(&0u16.to_le_bytes());
+            msg.extend_from_slice(&0u32.to_le_bytes());
+        }
+    }
 
-    // Flags
-    let flags: u32 =
-        0x00000202 | 0x00020000 | 0x00000010 | 0x00000200 | 0x00008000 | 0x00080000 | 0x00002000;
-    msg.extend_from_slice(&flags.to_le_bytes());
+    // NegotiateFlags
+    msg.extend_from_slice(&response_flags.to_le_bytes());
 
-    // Version
-    msg.extend_from_slice(&[0x06, 0x01, 0xB1, 0x1D, 0x00, 0x00, 0x00, 0x0F]);
+    if cfg.include_version {
+        msg.extend_from_slice(&NTLM_VERSION);
+    }
+    let mic_offset = if include_mic {
+        let off = msg.len();
+        msg.extend_from_slice(&[0u8; 16]);
+        Some(off)
+    } else {
+        None
+    };
 
     // Payload
+    msg.extend_from_slice(&lm_response);
+    msg.extend_from_slice(&nt_response);
     msg.extend_from_slice(&domain_utf16);
     msg.extend_from_slice(&username_utf16);
     msg.extend_from_slice(&workstation_utf16);
-    msg.extend_from_slice(&lm_response);
-    msg.extend_from_slice(&nt_response);
+    if let Some(key) = &encrypted_random_session_key {
+        msg.extend_from_slice(key);
+    }
 
-    msg
+    // -- MIC: HMAC-MD5(ExportedSessionKey, NEGOTIATE || CHALLENGE || AUTHENTICATE)
+    // with the MIC field zeroed while hashing ([MS-NLMP 3.1.5.1.2]).
+    let mut mic = None;
+    if let (Some(offset), Some(neg), Some(chal)) =
+        (mic_offset, cfg.negotiate_message, cfg.challenge_message)
+    {
+        let mut buf = Vec::with_capacity(neg.len() + chal.len() + msg.len());
+        buf.extend_from_slice(neg);
+        buf.extend_from_slice(chal);
+        buf.extend_from_slice(&msg);
+        let digest = hmac_md5(&exported_session_key, &buf);
+        msg[offset..offset + 16].copy_from_slice(&digest);
+        mic = Some(digest.to_vec());
+    }
+
+    NtlmAuthenticate {
+        message: msg,
+        exported_session_key,
+        key_exchange_key,
+        flags: response_flags,
+        challenge_flags,
+        client_challenge,
+        target_info: target_info_out,
+        mic,
+    }
+}
+
+/// UTF-16LE encode a string.
+fn utf16le(s: &str) -> Vec<u8> {
+    s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect()
 }
 
 /// Strip the MIC (Message Integrity Code) from an NTLMv2 Type 3 (Authenticate) message.
@@ -740,12 +1109,763 @@ pub fn strip_dce_rpc_signature(data: &[u8]) -> Vec<u8> {
 }
 
 // ===========================================================
+// Message signing & sealing ([MS-NLMP] 3.4.4 / 3.4.5)
+// ===========================================================
+
+/// `NTLMSSP_SIGN_VERSION` -- always 1, written into the 4-byte Version field
+/// of every `MESSAGE_SIGNATURE`.
+const NTLMSSP_SIGN_VERSION: u32 = 1;
+
+const SIGN_KEY_C2S: &str = "session key to client-to-server signing key magic constant";
+const SIGN_KEY_S2C: &str = "session key to server-to-client signing key magic constant";
+const SEAL_KEY_C2S: &str = "session key to client-to-server sealing key magic constant";
+const SEAL_KEY_S2C: &str = "session key to server-to-client sealing key magic constant";
+
+/// A resumable RC4 keystream.
+///
+/// NTLM sealing keys an RC4 stream once and then consumes it continuously
+/// across every message ([MS-NLMP 3.4.4]), so the cipher state has to survive
+/// between calls -- a one-shot `rc4_crypt` cannot be used here.
+#[derive(Clone)]
+pub struct Rc4Stream {
+    s: [u8; 256],
+    i: u8,
+    j: u8,
+}
+
+impl std::fmt::Debug for Rc4Stream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rc4Stream(<stateful>)")
+    }
+}
+
+impl Rc4Stream {
+    /// Key-schedule an RC4 stream ([RFC 6229]).
+    pub fn new(key: &[u8]) -> Self {
+        assert!(!key.is_empty(), "RC4 key must not be empty");
+        let mut s = [0u8; 256];
+        for (i, v) in s.iter_mut().enumerate() {
+            *v = i as u8;
+        }
+        let mut j: u8 = 0;
+        for i in 0..256usize {
+            j = j.wrapping_add(s[i]).wrapping_add(key[i % key.len()]);
+            s.swap(i, j as usize);
+        }
+        Self { s, i: 0, j: 0 }
+    }
+
+    /// XOR `data` in place, advancing the keystream.
+    pub fn apply(&mut self, data: &mut [u8]) {
+        for byte in data.iter_mut() {
+            self.i = self.i.wrapping_add(1);
+            self.j = self.j.wrapping_add(self.s[self.i as usize]);
+            self.s.swap(self.i as usize, self.j as usize);
+            let k =
+                self.s[(self.s[self.i as usize].wrapping_add(self.s[self.j as usize])) as usize];
+            *byte ^= k;
+        }
+    }
+
+    /// XOR a copy of `data`, advancing the keystream.
+    pub fn process(&mut self, data: &[u8]) -> Vec<u8> {
+        let mut out = data.to_vec();
+        self.apply(&mut out);
+        out
+    }
+}
+
+/// Derive one of the four NTLM signing/sealing sub-keys.
+///
+/// [MS-NLMP 3.4.4]: `MD5(ExportedSessionKey || <magic constant> || 0x00)`.
+/// Note this is a plain MD5, **not** an HMAC, and the magic constant includes
+/// its NUL terminator.
+fn derive_subkey(session_key: &[u8], magic: &str) -> [u8; 16] {
+    let mut hasher = Md5::new();
+    hasher.update(session_key);
+    hasher.update(magic.as_bytes());
+    hasher.update([0u8]);
+    let out = hasher.finalize();
+    let mut key = [0u8; 16];
+    key.copy_from_slice(&out);
+    key
+}
+
+/// Derive a sealing sub-key. The key material is truncated to 5 or 7 bytes
+/// unless 128-bit sessions were negotiated ([MS-NLMP 3.4.4]).
+fn derive_seal_subkey(flags: u32, session_key: &[u8], magic: &str) -> [u8; 16] {
+    let material: &[u8] = if flags & NTLMSSP_NEGOTIATE_128 != 0 {
+        session_key
+    } else if flags & NTLMSSP_NEGOTIATE_56 != 0 {
+        &session_key[..session_key.len().min(7)]
+    } else {
+        &session_key[..session_key.len().min(5)]
+    };
+    derive_subkey(material, magic)
+}
+
+/// Stateful NTLM per-message integrity engine.
+///
+/// This is the piece LDAP signing (and RPC signing) is built on: it turns an
+/// `ExportedSessionKey` into a bidirectional sign/seal context that produces
+/// the 16-byte `MESSAGE_SIGNATURE` and RC4-seals payloads exactly as Windows
+/// does.
+pub struct NtlmSigner {
+    flags: u32,
+    client_sign_key: [u8; 16],
+    server_sign_key: [u8; 16],
+    client_seal_key: [u8; 16],
+    server_seal_key: [u8; 16],
+    client_seal: Rc4Stream,
+    server_seal: Rc4Stream,
+    client_seq: u32,
+    server_seq: u32,
+}
+
+impl std::fmt::Debug for NtlmSigner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NtlmSigner")
+            .field("flags", &format_args!("0x{:08x}", self.flags))
+            .field("client_seq", &self.client_seq)
+            .field("server_seq", &self.server_seq)
+            .finish()
+    }
+}
+
+impl NtlmSigner {
+    /// Build a signer from the negotiated flags and the exported session key.
+    pub fn new(flags: u32, session_key: &[u8]) -> Self {
+        let client_sign_key = derive_subkey(session_key, SIGN_KEY_C2S);
+        let server_sign_key = derive_subkey(session_key, SIGN_KEY_S2C);
+        let client_seal_key = derive_seal_subkey(flags, session_key, SEAL_KEY_C2S);
+        let server_seal_key = derive_seal_subkey(flags, session_key, SEAL_KEY_S2C);
+        Self {
+            flags,
+            client_sign_key,
+            server_sign_key,
+            client_seal_key,
+            server_seal_key,
+            client_seal: Rc4Stream::new(&client_seal_key),
+            server_seal: Rc4Stream::new(&server_seal_key),
+            client_seq: 0,
+            server_seq: 0,
+        }
+    }
+
+    /// True when the session negotiated confidentiality (RC4 sealing).
+    pub fn sealing(&self) -> bool {
+        self.flags & NTLMSSP_NEGOTIATE_SEAL != 0
+    }
+
+    /// True when the session negotiated integrity (signing).
+    pub fn signing(&self) -> bool {
+        self.flags & NTLMSSP_NEGOTIATE_SIGN != 0 || self.flags & NTLMSSP_NEGOTIATE_ALWAYS_SIGN != 0
+    }
+
+    /// Build a 16-byte `MESSAGE_SIGNATURE` over `message`, consuming the
+    /// direction's RC4 keystream exactly as Windows does.
+    ///
+    /// For a *sealed* message the payload must already have been passed through
+    /// the same stream -- the ciphertext is produced first and the 8-byte
+    /// signature checksum is XORed with the following keystream bytes
+    /// ([MS-NLMP 3.4.5.1.1]).
+    fn compute_signature(
+        flags: u32,
+        sign_key: &[u8; 16],
+        seal: &mut Rc4Stream,
+        seq: u32,
+        message: &[u8],
+    ) -> [u8; 16] {
+        let mut sig = [0u8; 16];
+        sig[0..4].copy_from_slice(&NTLMSSP_SIGN_VERSION.to_le_bytes());
+        sig[12..16].copy_from_slice(&seq.to_le_bytes());
+
+        if flags & NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY != 0 {
+            let mut buf = Vec::with_capacity(4 + message.len());
+            buf.extend_from_slice(&seq.to_le_bytes());
+            buf.extend_from_slice(message);
+            let digest = hmac_md5(sign_key, &buf);
+            let mut checksum = [0u8; 8];
+            checksum.copy_from_slice(&digest[..8]);
+            if flags & NTLMSSP_NEGOTIATE_KEY_EXCH != 0 {
+                seal.apply(&mut checksum);
+            }
+            sig[4..12].copy_from_slice(&checksum);
+        } else {
+            // Legacy NTLMv1 signature: CRC32, then RC4 over the trailing 12
+            // bytes ([MS-NLMP 3.4.4.2.2]).
+            let crc = crc32(message);
+            let mut tail = [0u8; 12];
+            tail[4..8].copy_from_slice(&crc.to_le_bytes());
+            tail[8..12].copy_from_slice(&seq.to_le_bytes());
+            seal.apply(&mut tail);
+            sig[4..16].copy_from_slice(&tail);
+        }
+        sig
+    }
+
+    /// Wrap an outgoing PDU: returns `signature || payload`, sealing the
+    /// payload when confidentiality was negotiated.
+    pub fn wrap(&mut self, message: &[u8]) -> Vec<u8> {
+        let seq = self.client_seq;
+        self.client_seq = self.client_seq.wrapping_add(1);
+
+        let payload = if self.sealing() {
+            // Seal first: the RC4 keystream feeds the ciphertext before the
+            // signature checksum ([MS-NLMP 3.4.5.1]).
+            self.client_seal.process(message)
+        } else {
+            message.to_vec()
+        };
+        let sig = Self::compute_signature(
+            self.flags,
+            &self.client_sign_key,
+            &mut self.client_seal,
+            seq,
+            message,
+        );
+
+        let mut out = Vec::with_capacity(16 + payload.len());
+        out.extend_from_slice(&sig);
+        out.extend_from_slice(&payload);
+        out
+    }
+
+    /// Verify and unseal an incoming PDU (`signature || payload`).
+    ///
+    /// The sequence number carried in the signature is the one bound into the
+    /// MAC, so it doubles as the freshness value: verification uses it directly
+    /// instead of assuming a particular counter scheme. A failure to verify is
+    /// reported but the (already unsealed) payload is still returned, because
+    /// the reverse-direction key stream is what actually gates interoperability.
+    pub fn unwrap(&mut self, data: &[u8]) -> std::result::Result<Vec<u8>, String> {
+        if data.len() < 16 {
+            return Err(format!("signed message too short: {} bytes", data.len()));
+        }
+        let sig = &data[..16];
+        let body = &data[16..];
+        let plain = if self.sealing() {
+            self.server_seal.process(body)
+        } else {
+            body.to_vec()
+        };
+
+        let wire_seq = u32::from_le_bytes([sig[12], sig[13], sig[14], sig[15]]);
+        let expected = Self::compute_signature(
+            self.flags,
+            &self.server_sign_key,
+            &mut self.server_seal,
+            wire_seq,
+            &plain,
+        );
+        if expected != *sig {
+            return Err(format!(
+                "NTLM signature mismatch (seq {wire_seq}, {} byte body)",
+                body.len()
+            ));
+        }
+        self.server_seq = wire_seq.wrapping_add(1);
+        Ok(plain)
+    }
+
+    /// Sign the SPNEGO `mechListMIC` with sequence 0.
+    ///
+    /// Windows computes the mechListMIC from a *snapshot* of the NTLM context,
+    /// so the signature itself must not perturb the per-message sequence and
+    /// keystream. impacket emulates this by re-keying both RC4 streams and
+    /// restarting the sequence at 1 afterwards; so do we, because the DC does
+    /// too -- otherwise the first post-bind LDAP PDU would not unseal.
+    pub fn sign_mech_list_mic(&mut self, token: &[u8]) -> Vec<u8> {
+        let sig = Self::compute_signature(
+            self.flags,
+            &self.client_sign_key,
+            &mut self.client_seal,
+            0,
+            token,
+        );
+        self.client_seal = Rc4Stream::new(&self.client_seal_key);
+        self.server_seal = Rc4Stream::new(&self.server_seal_key);
+        self.client_seq = 1;
+        self.server_seq = 1;
+        sig.to_vec()
+    }
+
+    /// Current outgoing sequence number (for diagnostics).
+    pub fn next_client_seq(&self) -> u32 {
+        self.client_seq
+    }
+}
+
+/// CRC32 (IEEE) as used by the legacy NTLMv1 message signature.
+fn crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xFFFF_FFFF;
+    for byte in data {
+        crc ^= *byte as u32;
+        for _ in 0..8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
+
+// ===========================================================
 // Tests
 // ===========================================================
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Signing / sealing engine -------------------------
+
+    /// RFC 6229 test vector: RC4 with key 0x0102030405 produces the keystream
+    /// b2 39 63 05 f0 3d c0 27 cc c3 52 4a 0a 11 18 a8 ...
+    #[test]
+    fn test_rc4_stream_known_vector() {
+        let mut rc4 = Rc4Stream::new(&[0x01, 0x02, 0x03, 0x04, 0x05]);
+        let mut zeros = [0u8; 16];
+        rc4.apply(&mut zeros);
+        assert_eq!(hex::encode(zeros), "b2396305f03dc027ccc3524a0a1118a8");
+    }
+
+    /// The keystream must be continuous across calls -- re-keying per message is
+    /// the classic NTLM sealing bug.
+    #[test]
+    fn test_rc4_stream_is_continuous() {
+        let key = [0x11u8; 16];
+        let mut a = Rc4Stream::new(&key);
+        let first = a.process(&[0u8; 8]);
+        let second = a.process(&[0u8; 8]);
+        let mut b = Rc4Stream::new(&key);
+        let both = b.process(&[0u8; 16]);
+        assert_ne!(first, second, "a re-keyed stream would repeat ciphertext");
+        assert_eq!([first, second].concat(), both);
+    }
+
+    #[test]
+    fn test_ntlm_subkey_derivation_is_md5_of_key_magic_nul() {
+        let session_key = [0x42u8; 16];
+        let derived = derive_subkey(&session_key, SIGN_KEY_C2S);
+        let mut manual = Md5::new();
+        manual.update(session_key);
+        manual.update(SIGN_KEY_C2S.as_bytes());
+        manual.update([0u8]);
+        assert_eq!(derived.to_vec(), manual.finalize().to_vec());
+    }
+
+    /// `MD5(ExportedSessionKey || magic || 0x00)` for the MS-NLMP sign keys.
+    /// Regression: the magic constant must include its NUL terminator.
+    #[test]
+    fn test_sign_key_magic_includes_nul() {
+        let session_key = [0u8; 16];
+        let with_nul = derive_subkey(&session_key, SIGN_KEY_C2S);
+        let mut without = Md5::new();
+        without.update(session_key);
+        without.update(SIGN_KEY_C2S.as_bytes());
+        let no_nul: [u8; 16] = without.finalize().into();
+        assert_ne!(with_nul, no_nul);
+    }
+
+    /// A sealed wrap must be reproducible by an independent implementation of
+    /// the receiver side: same keys, same keystream order (payload then
+    /// checksum), same wire layout `signature || sealed payload`.
+    #[test]
+    fn test_wrap_seal_wire_format_and_keystream_order() {
+        let session_key: Vec<u8> = (0u8..16).collect();
+        let flags = NTLMSSP_CLIENT_FLAGS;
+        let mut signer = NtlmSigner::new(flags, &session_key);
+        let message = b"\x30\x05\x02\x01\x01\x42\x00";
+
+        let wrapped = signer.wrap(message);
+        assert_eq!(wrapped.len(), 16 + message.len());
+
+        // Re-derive the client direction from scratch.
+        let sign_key = derive_subkey(&session_key, SIGN_KEY_C2S);
+        let seal_key = derive_seal_subkey(flags, &session_key, SEAL_KEY_C2S);
+        let mut seal = Rc4Stream::new(&seal_key);
+        let expected_cipher = seal.process(message);
+        assert_eq!(&wrapped[16..], expected_cipher.as_slice());
+        // Confidentiality is negotiated, so the payload must actually differ.
+        assert_ne!(&wrapped[16..], message);
+
+        let expected_sig = NtlmSigner::compute_signature(flags, &sign_key, &mut seal, 0, message);
+        assert_eq!(&wrapped[..16], expected_sig.as_slice());
+        // Signature layout: Version(4) | Checksum(8) | SeqNum(4)
+        assert_eq!(&wrapped[0..4], &1u32.to_le_bytes());
+        assert_eq!(&wrapped[12..16], &0u32.to_le_bytes());
+    }
+
+    /// Two messages must consume one continuous keystream: the second PDU's
+    /// ciphertext cannot be produced by a freshly keyed stream.
+    #[test]
+    fn test_wrap_keystream_continues_across_messages() {
+        let session_key = [0x7Au8; 16];
+        let flags = NTLMSSP_CLIENT_FLAGS;
+        let mut signer = NtlmSigner::new(flags, &session_key);
+        let m1 = b"first-ldap-pdu";
+        let m2 = b"second-ldap-pdu";
+
+        let w1 = signer.wrap(m1);
+        let w2 = signer.wrap(m2);
+
+        let seal_key = derive_seal_subkey(flags, &session_key, SEAL_KEY_C2S);
+        let mut seal = Rc4Stream::new(&seal_key);
+        // Message 1: payload then 8 checksum bytes.
+        assert_eq!(seal.process(m1), w1[16..].to_vec());
+        let _ = seal.process(&[0u8; 8]);
+        // Message 2 continues where message 1 left off.
+        assert_eq!(seal.process(m2), w2[16..].to_vec());
+        assert_eq!(&w2[12..16], &1u32.to_le_bytes());
+    }
+
+    /// `unwrap` must accept a well-formed signature from the *other* direction
+    /// and reject tampering, using the sequence number carried in the signature.
+    #[test]
+    fn test_unwrap_verifies_and_rejects_tampering() {
+        let session_key = [0x33u8; 16];
+        let flags = NTLMSSP_CLIENT_FLAGS;
+        let mut receiver = NtlmSigner::new(flags, &session_key);
+
+        // Stand in for the server: seal/sign with the server-to-client keys,
+        // using an arbitrary sequence number to make sure it is honoured.
+        let plain = b"server-search-result";
+        let sign_key = derive_subkey(&session_key, SIGN_KEY_S2C);
+        let seal_key = derive_seal_subkey(flags, &session_key, SEAL_KEY_S2C);
+        let mut seal = Rc4Stream::new(&seal_key);
+        let cipher = seal.process(plain);
+        let sig = NtlmSigner::compute_signature(flags, &sign_key, &mut seal, 7, plain);
+        let mut wire = sig.to_vec();
+        wire.extend_from_slice(&cipher);
+
+        assert_eq!(receiver.unwrap(&wire).unwrap(), plain.to_vec());
+
+        // A flipped signature bit must be detected.
+        let mut bad = wire.clone();
+        bad[5] ^= 0xFF;
+        assert!(receiver.unwrap(&bad).is_err());
+
+        // Truncated input must not panic.
+        assert!(receiver.unwrap(&[0u8; 4]).is_err());
+    }
+
+    /// The mechListMIC is signed at sequence 0 and must not disturb the message
+    /// sequence: the first post-bind PDU uses sequence 1 (Windows behaviour,
+    /// mirrored by impacket's `reset_cipher`).
+    #[test]
+    fn test_mech_list_mic_restarts_sequence_at_one() {
+        let session_key = [0x5Cu8; 16];
+        let flags = NTLMSSP_CLIENT_FLAGS;
+        let mut signer = NtlmSigner::new(flags, &session_key);
+        assert_eq!(signer.next_client_seq(), 0);
+
+        let mic = signer.sign_mech_list_mic(b"0\x0c\x06\n+\x06\x01\x04\x01\x827\x02\x02\n");
+        assert_eq!(mic.len(), 16);
+        assert_eq!(signer.next_client_seq(), 1);
+
+        let wrapped = signer.wrap(b"bind-followed-by-search");
+        assert_eq!(&wrapped[12..16], &1u32.to_le_bytes());
+    }
+
+    #[test]
+    fn test_signer_flags_report_capabilities() {
+        let key = [0u8; 16];
+        let full = NtlmSigner::new(NTLMSSP_CLIENT_FLAGS, &key);
+        assert!(full.signing() && full.sealing());
+
+        let sign_only = NtlmSigner::new(NTLMSSP_NEGOTIATE_SIGN, &key);
+        assert!(sign_only.signing() && !sign_only.sealing());
+    }
+
+    /// With signing but no sealing, the payload travels in the clear and the
+    /// 8-byte checksum is still RC4-masked (KEY_EXCH is set).
+    #[test]
+    fn test_sign_only_leaves_payload_plaintext() {
+        let session_key = [0x2Bu8; 16];
+        let flags = NTLMSSP_NEGOTIATE_SIGN
+            | NTLMSSP_NEGOTIATE_ALWAYS_SIGN
+            | NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY
+            | NTLMSSP_NEGOTIATE_KEY_EXCH;
+        let mut signer = NtlmSigner::new(flags, &session_key);
+        let message = b"unsigned-ldap-pdu";
+        let wrapped = signer.wrap(message);
+        assert_eq!(&wrapped[16..], message);
+    }
+
+    // -- AV_PAIR helpers ---------------------------------
+
+    #[test]
+    fn test_av_pair_roundtrip() {
+        let info = b"\x02\x00\x0C\x00D\x00O\x00M\x00A\x00I\x00N\x00\x07\x00\x08\x00\x01\x02\x03\x04\x05\x06\x07\x08\x00\x00\x00\x00";
+        let pairs = parse_av_pairs(info);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[0].0, MSV_AV_NB_DOMAIN_NAME);
+        assert_eq!(pairs[1].0, MSV_AV_TIMESTAMP);
+        assert_eq!(serialize_av_pairs(&pairs), info.to_vec());
+        assert_eq!(get_av_pair(info, MSV_AV_TIMESTAMP).unwrap().len(), 8);
+        assert!(get_av_pair(info, MSV_AV_TARGET_NAME).is_none());
+    }
+
+    #[test]
+    fn test_set_av_pair_replaces_in_place() {
+        let mut pairs = vec![
+            (MSV_AV_NB_DOMAIN_NAME, vec![1, 2]),
+            (MSV_AV_TIMESTAMP, vec![0; 8]),
+        ];
+        set_av_pair(&mut pairs, MSV_AV_TIMESTAMP, &[9; 8]);
+        assert_eq!(pairs.len(), 2);
+        assert_eq!(pairs[1], (MSV_AV_TIMESTAMP, vec![9; 8]));
+        set_av_pair(&mut pairs, MSV_AV_TARGET_NAME, &[7; 4]);
+        assert_eq!(pairs.len(), 3);
+    }
+
+    // -- Type 1 / Type 3 layout ---------------------------
+
+    #[test]
+    fn test_negotiate_message_layout_with_domain() {
+        let msg = build_negotiate_message("LAINOSCP");
+        assert_eq!(&msg[0..8], b"NTLMSSP\x00");
+        assert_eq!(u32::from_le_bytes([msg[8], msg[9], msg[10], msg[11]]), 1);
+        // NegotiateFlags sits at offset 12 (MS-NLMP 2.2.1.1).
+        let flags = u32::from_le_bytes([msg[12], msg[13], msg[14], msg[15]]);
+        assert_eq!(flags & NTLMSSP_NEGOTIATE_VERSION, 0);
+        assert_eq!(flags & NTLMSSP_NEGOTIATE_SIGN, NTLMSSP_NEGOTIATE_SIGN);
+        assert_eq!(flags & NTLMSSP_NEGOTIATE_SEAL, NTLMSSP_NEGOTIATE_SEAL);
+        assert_eq!(flags & NTLMSSP_REQUEST_TARGET, NTLMSSP_REQUEST_TARGET);
+        // DomainNameFields (Len, MaxLen, BufferOffset) follow the flags.
+        let domain_len = u16::from_le_bytes([msg[16], msg[17]]) as usize;
+        let domain_max_len = u16::from_le_bytes([msg[18], msg[19]]);
+        let domain_off = u32::from_le_bytes([msg[20], msg[21], msg[22], msg[23]]) as usize;
+        assert_eq!(domain_len, 16);
+        assert_eq!(domain_max_len, 16);
+        // No Version field is advertised by default, so the payload starts at 32.
+        assert_eq!(domain_off, 32);
+        // WorkstationFields are never populated in a Type 1.
+        assert_eq!(u16::from_le_bytes([msg[24], msg[25]]), 0);
+        assert_eq!(u16::from_le_bytes([msg[26], msg[27]]), 0);
+        assert_eq!(u32::from_le_bytes([msg[28], msg[29], msg[30], msg[31]]), 0);
+        assert_eq!(msg.len(), 32 + 16);
+        // DomainName payload is exactly where the header says it is.
+        assert_eq!(
+            String::from_utf16_lossy(
+                &msg[domain_off..domain_off + domain_len]
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>()
+            ),
+            "LAINOSCP"
+        );
+    }
+
+    #[test]
+    fn test_negotiate_message_version_block_precedes_payload() {
+        let msg = build_negotiate_message_ex("CORP", true);
+        let flags = u32::from_le_bytes([msg[12], msg[13], msg[14], msg[15]]);
+        assert_eq!(flags & NTLMSSP_NEGOTIATE_VERSION, NTLMSSP_NEGOTIATE_VERSION);
+        // The 8-byte Version sits at 32..40 and the domain payload after it.
+        assert_eq!(&msg[32..40], &NTLM_VERSION);
+        let domain_off = u32::from_le_bytes([msg[20], msg[21], msg[22], msg[23]]) as usize;
+        assert_eq!(domain_off, 40);
+    }
+
+    #[test]
+    fn test_negotiate_message_without_domain_has_no_payload() {
+        let msg = build_negotiate_message("");
+        assert_eq!(msg.len(), 32);
+        assert_eq!(u16::from_le_bytes([msg[16], msg[17]]), 0);
+        assert_eq!(u16::from_le_bytes([msg[18], msg[19]]), 0);
+        assert_eq!(u32::from_le_bytes([msg[20], msg[21], msg[22], msg[23]]), 0);
+    }
+
+    /// The Type 3 header offsets must point at the actual payload, including
+    /// when the optional Version and MIC fields are present. This is the bug
+    /// that made every LDAP NTLM bind fail: a stray Version block was written
+    /// at offset 64 while the DomainName field still claimed offset 64.
+    #[test]
+    fn test_authenticate_message_offsets_are_consistent() {
+        let server_challenge = [0x11u8; 8];
+        let target_info = b"\x02\x00\x0C\x00D\x00O\x00M\x00A\x00I\x00N\x00\x00\x00";
+        let cfg = NtlmAuthConfig {
+            key_exchange: true,
+            ..Default::default()
+        };
+        let out = build_authenticate_message_full(
+            "LAINOSCP",
+            "shannon",
+            &nt_hash("GoldSeagull123"),
+            &server_challenge,
+            Some(target_info),
+            NTLMSSP_CLIENT_FLAGS,
+            NTLMSSP_CLIENT_FLAGS,
+            &cfg,
+        );
+        let msg = &out.message;
+        assert_eq!(u32::from_le_bytes([msg[8], msg[9], msg[10], msg[11]]), 3);
+
+        let read_field = |off: usize| -> (usize, usize, usize) {
+            let len = u16::from_le_bytes([msg[off], msg[off + 1]]) as usize;
+            let offset =
+                u32::from_le_bytes([msg[off + 4], msg[off + 5], msg[off + 6], msg[off + 7]])
+                    as usize;
+            (len, offset, offset + len)
+        };
+        // Fields are byte-packed and contiguous in the order they are declared:
+        // LM(24) NT(16 proof + 48 blob) Domain(16) User(14) Workstation(0) Key(16).
+        for (name, off, expect_len, expect_off) in [
+            ("lm", 12, 24usize, 64usize),
+            ("nt", 20, 64usize, 88usize),
+            ("domain", 28, 16usize, 152usize),
+            ("user", 36, 14usize, 168usize),
+            ("workstation", 44, 0usize, 182usize),
+            ("sessionkey", 52, 16usize, 182usize),
+        ] {
+            let (len, offset, end) = read_field(off);
+            assert_eq!(len, expect_len, "{name} length");
+            assert_eq!(offset, expect_off, "{name} offset");
+            assert!(end <= msg.len(), "{name} payload runs past end of message");
+        }
+        assert_eq!(msg.len(), 198);
+
+        // Verify the payload really is at those offsets.
+        let (domain_len, domain_off, _) = read_field(28);
+        let domain = String::from_utf16_lossy(
+            &msg[domain_off..domain_off + domain_len]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(domain, "LAINOSCP");
+        let (user_len, user_off, _) = read_field(36);
+        let user = String::from_utf16_lossy(
+            &msg[user_off..user_off + user_len]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(user, "shannon");
+    }
+
+    #[test]
+    fn test_authenticate_key_exchange_roundtrip() {
+        let server_challenge = [0xABu8; 8];
+        let nt = nt_hash("GoldSeagull123");
+        let cfg = NtlmAuthConfig {
+            key_exchange: true,
+            ..Default::default()
+        };
+        let out = build_authenticate_message_full(
+            "LAINOSCP",
+            "shannon",
+            &nt,
+            &server_challenge,
+            None,
+            NTLMSSP_CLIENT_FLAGS,
+            NTLMSSP_CLIENT_FLAGS,
+            &cfg,
+        );
+
+        // The exported session key is the random one we generated, and the
+        // EncryptedRandomSessionKey field is RC4(KeyExchangeKey, exported).
+        assert_ne!(out.exported_session_key, out.key_exchange_key);
+        let enc =
+            crate::crypto::rc4_util::rc4_crypt(&out.key_exchange_key, &out.exported_session_key);
+        let key_off = u32::from_le_bytes([
+            out.message[56],
+            out.message[57],
+            out.message[58],
+            out.message[59],
+        ]) as usize;
+        assert_eq!(&out.message[key_off..key_off + 16], enc.as_slice());
+    }
+
+    #[test]
+    fn test_authenticate_target_name_spn_from_dns_host() {
+        let mut target_info = Vec::new();
+        target_info.extend_from_slice(&MSV_AV_DNS_COMPUTER_NAME.to_le_bytes());
+        let fqdn = "DC01.lainoscp.local"
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect::<Vec<u8>>();
+        target_info.extend_from_slice(&(fqdn.len() as u16).to_le_bytes());
+        target_info.extend_from_slice(&fqdn);
+        target_info.extend_from_slice(&MSV_AV_EOL.to_le_bytes());
+        target_info.extend_from_slice(&0u16.to_le_bytes());
+
+        let cfg = NtlmAuthConfig {
+            service: Some("ldap"),
+            key_exchange: true,
+            ..Default::default()
+        };
+        let out = build_authenticate_message_full(
+            "LAINOSCP",
+            "shannon",
+            &nt_hash("x"),
+            &[0u8; 8],
+            Some(&target_info),
+            NTLMSSP_CLIENT_FLAGS,
+            NTLMSSP_CLIENT_FLAGS,
+            &cfg,
+        );
+        let target_name = get_av_pair(&out.target_info, MSV_AV_TARGET_NAME).unwrap();
+        let decoded = String::from_utf16_lossy(
+            &target_name
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        );
+        assert_eq!(decoded, "ldap/DC01.lainoscp.local");
+        // A fresh MsvAvTimestamp must be echoed back in the NTLMv2 blob.
+        assert!(get_av_pair(&out.target_info, MSV_AV_TIMESTAMP).is_some());
+    }
+
+    #[test]
+    fn test_authenticate_mic_is_hmac_over_three_messages() {
+        let negotiate = build_negotiate_message_ex("LAINOSCP", true);
+        let server_challenge = [0x5Au8; 8];
+        // Minimal but structurally valid CHALLENGE message.
+        let mut challenge = Vec::new();
+        challenge.extend_from_slice(b"NTLMSSP\x00");
+        challenge.extend_from_slice(&2u32.to_le_bytes());
+        challenge.extend_from_slice(&[0u8; 8]);
+        challenge.extend_from_slice(&NTLMSSP_CLIENT_FLAGS.to_le_bytes());
+        challenge.extend_from_slice(&server_challenge);
+        challenge.extend_from_slice(&[0u8; 8]);
+        challenge.extend_from_slice(&[0u8; 8]);
+
+        let cfg = NtlmAuthConfig {
+            negotiate_message: Some(&negotiate),
+            challenge_message: Some(&challenge),
+            include_version: true,
+            key_exchange: true,
+            ..Default::default()
+        };
+        let out = build_authenticate_message_full(
+            "LAINOSCP",
+            "shannon",
+            &nt_hash("GoldSeagull123"),
+            &server_challenge,
+            None,
+            NTLMSSP_CLIENT_FLAGS,
+            NTLMSSP_CLIENT_FLAGS,
+            &cfg,
+        );
+        let mic = out
+            .mic
+            .expect("MIC must be present when Version is advertised");
+        // MIC lives at 64 + 8 (Version) = 72.
+        assert_eq!(&out.message[72..88], mic.as_slice());
+        assert_eq!(&out.message[64..72], &NTLM_VERSION);
+
+        // Recompute independently: the MIC is over NEGOTIATE || CHALLENGE || AUTH
+        // with the MIC field zeroed.
+        let mut zeroed = out.message.clone();
+        zeroed[72..88].fill(0);
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&negotiate);
+        buf.extend_from_slice(&challenge);
+        buf.extend_from_slice(&zeroed);
+        assert_eq!(hmac_md5(&out.exported_session_key, &buf), mic);
+    }
 
     // -- NT Hash ------------------------------------------
 
@@ -793,11 +1913,31 @@ mod tests {
 
     #[test]
     fn test_ntlmv2_hash_user_case_insensitive() {
-        // Username and domain are uppercased internally
+        // MS-NLMP 3.3.2: only the user name is upper-cased.
         let nt = nt_hash("password"); // Test vector
-        let v2a = ntlmv2_hash(&nt, "Admin", "corp.local");
-        let v2b = ntlmv2_hash(&nt, "ADMIN", "CORP.LOCAL");
-        assert_eq!(v2a, v2b);
+        assert_eq!(
+            ntlmv2_hash(&nt, "Admin", "CORP"),
+            ntlmv2_hash(&nt, "ADMIN", "CORP")
+        );
+    }
+
+    #[test]
+    fn test_ntlmv2_hash_domain_case_sensitive() {
+        // The user domain is used verbatim -- upper-casing it changes the key
+        // and makes every NTLMv2 logon fail with rc=49.
+        let nt = nt_hash("password"); // Test vector
+        assert_ne!(
+            ntlmv2_hash(&nt, "admin", "CORP"),
+            ntlmv2_hash(&nt, "admin", "corp")
+        );
+    }
+
+    #[test]
+    fn test_ntlmv2_hash_matches_ms_nlmp_vector() {
+        // MS-NLMP 4.2.4.1.1 -- NTOWFv2 for ("Password", "User", "Domain")
+        let nt = nt_hash("Password");
+        let v2 = ntlmv2_hash(&nt, "User", "Domain");
+        assert_eq!(hex::encode(v2), "0c868a403bfd7a93a3001ef22ef02e3f");
     }
 
     #[test]

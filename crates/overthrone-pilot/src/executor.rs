@@ -14,8 +14,8 @@ use colored::Colorize;
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::exec::smbexec::escape_cmd_metacharacters;
 use overthrone_core::proto::epm::{
-    btf_read_frame, btf_write_frame, resolve_uuid_via_epm_pipe, resolve_uuid_via_epm_tcp,
-    resolve_uuid_via_epm_tcp_auth,
+    resolve_uuid_via_epm_pipe, resolve_uuid_via_epm_tcp, resolve_uuid_via_epm_tcp_auth,
+    tcp_read_pdu, tcp_write_pdu,
 };
 use overthrone_core::proto::ntlm::nt_hash;
 use overthrone_core::proto::{kerberos, ldap, registry, rid, smb::SmbSession};
@@ -4895,14 +4895,14 @@ async fn dcsync_tcp_transact(
         .map_err(|e| format!("TCP connect to {addr}: {e}"))?;
 
     // Write the RPC PDU with BTF framing
-    let write_fut = btf_write_frame(&mut stream, pdu);
+    let write_fut = tcp_write_pdu(&mut stream, pdu);
     timeout(Duration::from_secs(10), write_fut)
         .await
         .map_err(|_| "BTF write timed out".to_string())?
         .map_err(|e| format!("BTF write to {addr}: {e}"))?;
 
     // Read the response with BTF framing
-    let read_fut = btf_read_frame(&mut stream);
+    let read_fut = tcp_read_pdu(&mut stream);
     let resp = timeout(Duration::from_secs(30), read_fut)
         .await
         .map_err(|_| "BTF read timed out (30s)".to_string())?
@@ -6029,7 +6029,7 @@ fn hex_decode(hex: &str) -> Vec<u8> {
 }
 
 /// Parse a SID from bytes to string
-fn parse_sid_bytes(bytes: &[u8]) -> String {
+pub fn parse_sid_bytes(bytes: &[u8]) -> String {
     if bytes.len() < 8 {
         return "INVALID-SID".to_string();
     }
@@ -6052,7 +6052,7 @@ fn parse_sid_bytes(bytes: &[u8]) -> String {
 
 /// Strip the RID to get just the domain SID prefix
 /// S-1-5-21-x-y-z-1234 -> S-1-5-21-x-y-z
-fn domain_sid_prefix(full_sid: &str) -> String {
+pub fn domain_sid_prefix(full_sid: &str) -> String {
     match full_sid.rsplitn(2, '-').last() {
         Some(prefix) => prefix.to_string(),
         None => full_sid.to_string(),

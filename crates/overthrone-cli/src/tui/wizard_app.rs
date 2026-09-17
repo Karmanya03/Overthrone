@@ -598,6 +598,17 @@ pub enum InputField {
     Wordlist,
     Template,
     OutputDir,
+    /// Command to run for the Remote Execution modules. Empty means use the
+    /// built-in recon command (`whoami /all`).
+    Command,
+    /// krbtgt NT hash (32 hex) or AES256 key (64 hex) for ticket forgery.
+    /// Left blank, the DCSync module supplies it automatically.
+    KrbtgtHash,
+    /// Domain SID (`S-1-5-21-...`) required to forge tickets. Left blank, it is
+    /// resolved from LDAP.
+    DomainSid,
+    /// Target SPN for Silver Ticket (e.g. `cifs/dc01.corp.local`).
+    TargetSpn,
 }
 
 impl InputField {
@@ -611,6 +622,10 @@ impl InputField {
             Self::Wordlist => "Wordlist Path (optional)",
             Self::Template => "Certificate Template",
             Self::OutputDir => "Output Directory",
+            Self::Command => "Command to Execute (Remote Exec)",
+            Self::KrbtgtHash => "krbtgt Hash (optional)",
+            Self::DomainSid => "Domain SID (optional)",
+            Self::TargetSpn => "Target SPN (Silver)",
         }
     }
 
@@ -624,11 +639,15 @@ impl InputField {
             Self::Wordlist => "./assets/wordlist_top10k.txt.zst",
             Self::Template => "User",
             Self::OutputDir => "./results",
+            Self::Command => "whoami /all",
+            Self::KrbtgtHash => "aad3b435b51404eeaad3b435b51404ee:...",
+            Self::DomainSid => "S-1-5-21-...",
+            Self::TargetSpn => "cifs/dc01.corp.local",
         }
     }
 
     pub fn is_secret(&self) -> bool {
-        matches!(self, Self::Password | Self::NtHash)
+        matches!(self, Self::Password | Self::NtHash | Self::KrbtgtHash)
     }
 }
 
@@ -641,6 +660,10 @@ pub const ALL_INPUT_FIELDS: &[InputField] = &[
     InputField::Wordlist,
     InputField::Template,
     InputField::OutputDir,
+    InputField::Command,
+    InputField::KrbtgtHash,
+    InputField::DomainSid,
+    InputField::TargetSpn,
 ];
 
 // ===========================================================

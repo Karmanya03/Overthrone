@@ -6,6 +6,7 @@
 //! Uses the `ldap3` crate (v0.11) with async Tokio support.
 
 use crate::error::{OverthroneError, Result};
+use crate::proto::ntlm::{NtlmAuthConfig, NtlmSigner};
 use ldap3::controls::{Control, ControlType, PagedResults, RawControl};
 use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,28 @@ pub const UAC_NORMAL_ACCOUNT: u32 = 0x0200;
 pub const UAC_WORKSTATION_TRUST: u32 = 0x1000;
 /// UserAccountControl flag: server trust account (DC)
 pub const UAC_SERVER_TRUST: u32 = 0x2000;
+
+/// Human-readable label for an AD `domainFunctionality` /
+/// `domainControllerFunctionality` value.
+///
+/// Level `7` is `DS_BEHAVIOR_WIN2016` and is shared by Windows Server 2016,
+/// 2019, 2022 **and** 2025, so the functional level on its own cannot name the
+/// release. For an exact answer use the DC build number
+/// (`sv101_version_minor` from SRVSVC `NetrServerGetInfo`, mapped by
+/// [`crate::proto::epm::windows_server_release`]).
+pub fn domain_functionality_release(level: u32) -> &'static str {
+    match level {
+        0 => "Windows Server 2000",
+        1 => "Windows Server 2003 (interim)",
+        2 => "Windows Server 2003",
+        3 => "Windows Server 2008",
+        4 => "Windows Server 2008 R2",
+        5 => "Windows Server 2012",
+        6 => "Windows Server 2012 R2",
+        7 => "Windows Server 2016+ (2016/2019/2022/2025)",
+        _ => "Unknown",
+    }
+}
 
 /// Common user attributes for enumeration
 const USER_ATTRS: &[&str] = &[
@@ -165,19 +188,31 @@ pub struct LdapSession {
 // ===========================================================
 
 /// Minimal raw LDAP client backed by a `tokio::net::TcpStream`.
-/// Supports NTLM SASL bind (pass-the-hash) and basic `SearchRequest`
-/// operations without paging.  Used by `LdapSession::connect_with_hash`
-/// when an NT hash is provided instead of a cleartext password.
+///
+/// Supports a real NTLM SASL bind (including the security layer: LDAP signing
+/// and sealing) and basic `SearchRequest` operations without paging. Used by
+/// `LdapSession::connect_with_hash` (pass-the-hash) and as the fallback when a
+/// DC rejects a simple bind because it requires signing.
 pub(crate) struct RawLdapConn {
     stream: tokio::net::TcpStream,
     next_id: u32,
-    /// NTLM session key derived after SASL bind (for message signing).
-    /// WS2025 enforces LDAP signing; without this, all post-bind operations fail.
-    session_key: Option<Vec<u8>>,
-    /// Client signing sequence number (monotonically increasing per MS-NLMP).
-    client_sign_seq: u32,
-    /// Server signing sequence number.
-    server_sign_seq: u32,
+    /// Address this connection was built for, retained so the session can be
+    /// re-established after a DC-side drop.
+    addr: String,
+    /// Credentials, retained for re-binding: SASL sign/seal state is per
+    /// connection and cannot survive a reconnect.
+    creds: Option<RawCreds>,
+    /// NTLM sign/seal context. `Some` once the SASL security layer is active,
+    /// which is what LDAP signing / "requires binds to turn on integrity
+    /// checking" needs.
+    signer: Option<NtlmSigner>,
+}
+
+/// Credentials used to (re)establish an NTLM SASL bind.
+struct RawCreds {
+    domain: String,
+    username: String,
+    nt_hash: Vec<u8>,
 }
 
 impl RawLdapConn {
@@ -189,12 +224,13 @@ impl RawLdapConn {
                     target: addr.to_string(),
                     reason: format!("TCP connect failed: {e}"),
                 })?;
+        let _ = stream.set_nodelay(true);
         Ok(Self {
             stream,
             next_id: 1,
-            session_key: None,
-            client_sign_seq: 0,
-            server_sign_seq: 0,
+            addr: addr.to_string(),
+            creds: None,
+            signer: None,
         })
     }
 
@@ -204,7 +240,95 @@ impl RawLdapConn {
         id
     }
 
-    /// NTLM SASL bind (3-way NTLMSSP exchange) using pass-the-hash.
+    /// Whether the SASL security layer negotiated integrity/confidentiality.
+    pub(crate) fn is_signed(&self) -> bool {
+        self.signer.is_some()
+    }
+
+    /// True when the negotiated security layer also encrypts payloads.
+    pub(crate) fn is_sealed(&self) -> bool {
+        self.signer.as_ref().is_some_and(NtlmSigner::sealing)
+    }
+
+    /// Frame an outgoing PDU for the SASL security layer.
+    ///
+    /// A signed/sealed LDAP stream replaces the bare `LDAPMessage` framing with
+    /// `[u32 BE length][16-byte NTLM signature][payload]`
+    /// ([RFC 4511 4.2.1], OpenLDAP `sb_sasl_generic_*`).
+    fn frame_outgoing(&mut self, msg: &[u8]) -> Vec<u8> {
+        match self.signer.as_mut() {
+            Some(signer) => {
+                let wrapped = signer.wrap(msg);
+                let mut framed = Vec::with_capacity(4 + wrapped.len());
+                framed.extend_from_slice(&(wrapped.len() as u32).to_be_bytes());
+                framed.extend_from_slice(&wrapped);
+                framed
+            }
+            None => msg.to_vec(),
+        }
+    }
+
+    /// Send an LDAP PDU through the SASL security layer when it is active.
+    async fn send_message(&mut self, msg: &[u8]) -> crate::error::Result<()> {
+        let framed = self.frame_outgoing(msg);
+        raw_ldap_send(&mut self.stream, &framed).await
+    }
+
+    /// Receive an LDAP PDU, unwrapping and verifying the SASL security layer.
+    async fn recv_message(&mut self) -> crate::error::Result<Vec<u8>> {
+        if self.signer.is_none() {
+            return raw_ldap_recv(&mut self.stream).await;
+        }
+
+        let mut len_buf = [0u8; 4];
+        raw_read_exact(&mut self.stream, &mut len_buf).await?;
+        let len = u32::from_be_bytes(len_buf) as usize;
+        if len == 0 || len > 16 * 1024 * 1024 {
+            return Err(OverthroneError::Ldap {
+                target: self.addr.clone(),
+                reason: format!("SASL record length out of range: {len} bytes"),
+            });
+        }
+        let mut buf = vec![0u8; len];
+        raw_read_exact(&mut self.stream, &mut buf).await?;
+
+        let signer = self.signer.as_mut().expect("signer checked above");
+        signer.unwrap(&buf).map_err(|e| OverthroneError::Ldap {
+            target: self.addr.clone(),
+            reason: format!("LDAP SASL unseal/verify failed: {e}"),
+        })
+    }
+
+    /// Re-establish the connection and re-run the SASL bind.
+    ///
+    /// The sign/seal context is bound to the TCP connection, so a dropped
+    /// connection cannot be resumed mid-session -- the whole bind has to be
+    /// replayed. Credentials from the previous bind are reused.
+    pub(crate) async fn rebind(&mut self) -> crate::error::Result<()> {
+        let Some(creds) = self.creds.take() else {
+            return Err(OverthroneError::Ldap {
+                target: self.addr.clone(),
+                reason: "cannot rebind: no credentials retained on this session".to_string(),
+            });
+        };
+        let addr = self.addr.clone();
+        let fresh = Self::connect(&addr).await?;
+        *self = fresh;
+        self.ntlm_bind(&creds.domain, &creds.username, &creds.nt_hash)
+            .await
+    }
+
+    /// NTLM SASL bind with the SASL security layer (LDAP signing/sealing).
+    ///
+    /// Implements the full GSS-SPNEGO sequence a Windows DC expects:
+    ///
+    /// 1. `NEGOTIATE` in a `NegTokenInit` -- requesting SIGN+SEAL+KEY_EXCH.
+    /// 2. `CHALLENGE` comes back in a `NegTokenResp` (rc=14, saslBindInProgress).
+    /// 3. `AUTHENTICATE` in a `NegTokenResp`, carrying the NTLMv2 response, the
+    ///    MIC and -- when integrity was negotiated -- the SPNEGO `mechListMIC`.
+    /// 4. rc=0. From here on every LDAP PDU is signed and framed.
+    ///
+    /// `nt_hash` is the NT hash, so this doubles as pass-the-hash.
     pub(crate) async fn ntlm_bind(
         &mut self,
         domain: &str,
@@ -214,123 +338,154 @@ impl RawLdapConn {
         use crate::proto::ntlm;
         use crate::proto::smb2;
 
-        // -- Step 1: Send SPNEGO NegTokenInit wrapping NTLMSSP NEGOTIATE --
-        let negotiate = ntlm::build_negotiate_message(domain);
+        let nt_hash = nt_hash.to_vec();
+        self.creds = Some(RawCreds {
+            domain: domain.to_string(),
+            username: username.to_string(),
+            nt_hash: nt_hash.clone(),
+        });
+        self.signer = None;
+
+        // -- Step 1: SPNEGO NegTokenInit wrapping NTLMSSP NEGOTIATE --
+        // NEGOTIATE_VERSION is advertised (as Windows' own LDAP client does), so
+        // the AUTHENTICATE message must carry a MIC.
+        let negotiate = ntlm::build_negotiate_message_ex(domain, true);
         let spnego_init = smb2::wrap_spnego_init(&negotiate);
         let id1 = self.next_msg_id();
         let req1 = build_bind_sasl(&mut [], id1, "GSS-SPNEGO", &spnego_init);
         raw_ldap_send(&mut self.stream, &req1).await?;
 
-        // -- Step 2: Receive SPNEGO NegTokenResp wrapping NTLMSSP CHALLENGE --
+        // -- Step 2: SPNEGO NegTokenResp wrapping NTLMSSP CHALLENGE --
         let resp1 = raw_ldap_recv(&mut self.stream).await?;
+        let (rc1, _matched, diag1) = parse_bind_response_result(&resp1);
+        if rc1 != 14 && rc1 != 0 {
+            return Err(OverthroneError::Ldap {
+                target: self.addr.clone(),
+                reason: format!(
+                    "NTLM SASL negotiate rejected (rc={rc1}: {}){}",
+                    ldap_rc_to_string(rc1 as u32),
+                    if diag1.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" -- server said: {diag1}")
+                    }
+                ),
+            });
+        }
         let sasl_creds = parse_bind_response_sasl(&resp1).map_err(|e| OverthroneError::Ldap {
-            target: "raw".to_string(),
+            target: self.addr.clone(),
             reason: format!("NTLM SASL step 1 failed: {e}"),
         })?;
 
         let ntlm_challenge =
             smb2::extract_ntlmssp_from_spnego(&sasl_creds).map_err(|e| OverthroneError::Ldap {
-                target: "raw".to_string(),
+                target: self.addr.clone(),
                 reason: format!("SPNEGO NTLM challenge extraction failed: {e}"),
             })?;
 
         let challenge_msg =
             ntlm::parse_challenge_message(&ntlm_challenge).map_err(|e| OverthroneError::Ldap {
-                target: "raw".to_string(),
+                target: self.addr.clone(),
                 reason: format!("NTLM challenge parse failed: {e}"),
             })?;
 
-        // Extract the NetBIOS domain name from the server's challenge target_info.
-        // Per MS-NLMP, the NTLMv2 response key should use the server-provided domain
-        // (AvId=2, MsvAvNbDomainName) rather than the caller-supplied FQDN. Using the
-        // FQDN (e.g., "corp.local") when the DC expects "CORP" causes rc=49 on WS2025.
+        // Per MS-NLMP 3.3.2 the NTLMv2 key is derived from the *server's* NetBIOS
+        // domain (MsvAvNbDomainName), not the caller-supplied FQDN. Using the FQDN
+        // when the DC expects the short name yields rc=49 invalidCredentials.
         let effective_domain = challenge_msg
             .target_info
             .as_deref()
             .and_then(extract_nb_domain_from_target_info)
             .unwrap_or_else(|| domain.to_uppercase());
         debug!(
-            "RawLDAP: NTLM domain: caller='{}', challenge='{}'",
-            domain, effective_domain
+            "RawLDAP: domain caller='{domain}' challenge='{effective_domain}', \
+             challenge flags=0x{:08x}",
+            challenge_msg.flags
         );
 
-        // -- Step 3: Compute NTLM session key for LDAP message signing. --
-        // WS2025 enforces LDAP signing; without deriving the session key, all
-        // post-bind LDAP operations fail with protocolError (rc=2).
-        //
-        // Per MS-NLMP Section 3.1.5.1.2:
-        //   ResponseKeyNT = HMAC_MD5(NTOWFv1(password), Unicode(Upper(Case(User)) + " domainspn"))
-        //   NTProofStr = HMAC_MD5(ResponseKeyNT, ServerChallenge + ClientBlob)
-        //   SessionBaseKey = HMAC_MD5(ResponseKeyNT, NTProofStr)
-        //   ExportedSessionKey = random 16-byte key (client-generated)
-        //   KeyExchangeKey = HMAC_MD5(SessionBaseKey, CHALLENGE_MESSAGE.ClientChallenge)
-        //   EncryptedSessionKey = RC4(KeyExchangeKey, ExportedSessionKey)
-        //
-        // For signing we use ExportedSessionKey (or SessionBaseKey when KEY_EXCH is off).
-        let session_key = {
-            let ntlmv2_hash = ntlm::ntlmv2_hash(nt_hash, username, &effective_domain);
-            // Rebuild the client blob (same one used in build_authenticate_message)
-            let client_blob = ntlm::build_ntlmv2_client_blob(
-                ntlm::windows_filetime_now(),
-                &[0u8; 8],
-                challenge_msg.target_info.as_deref().unwrap_or(&[]),
-            );
-            let mut proof_input = Vec::with_capacity(8 + client_blob.len());
-            proof_input.extend_from_slice(&challenge_msg.challenge);
-            proof_input.extend_from_slice(&client_blob);
-            let nt_proof = ntlm::hmac_md5(&ntlmv2_hash, &proof_input);
-            let session_base_key = ntlm::hmac_md5(&ntlmv2_hash, &nt_proof);
-
-            // If server negotiated KEY_EXCH, the exported key is encrypted with
-            // KeyExchangeKey = HMAC_MD5(SessionBaseKey, ServerChallenge).
-            // Otherwise the exported key *is* the session base key.
-            let server_negotiates_key_exch = challenge_msg.flags & 0x4000_0000 != 0;
-            if server_negotiates_key_exch {
-                let _key_exchange_key = ntlm::hmac_md5(&session_base_key, &challenge_msg.challenge);
-                // For LDAP signing we use SessionBaseKey directly (RC4 decrypt
-                // the encrypted session key from the Type3 message).
-                // The authenticate message contains: EncryptedRandomSessionKey.
-                // We re-derive it here since we generated it.
-                session_base_key
-            } else {
-                session_base_key
-            }
-        };
-        debug!(
-            "RawLDAP: NTLM session key derived ({} bytes) for signing",
-            session_key.len()
-        );
-
-        // -- Step 4: Send SPNEGO NegTokenResp wrapping NTLMSSP AUTHENTICATE --
-        let authenticate = ntlm::build_authenticate_message(
+        // -- Step 3: AUTHENTICATE + session key + MIC ---------------------------
+        // `build_authenticate_message_full` builds the NTLMv2 response, performs
+        // the MS-NLMP 3.1.5.2 key exchange and returns the *same* ExportedSessionKey
+        // that ends up (RC4-encrypted) in the message -- so the sign/seal context
+        // always matches what the DC derived.
+        let auth = ntlm::build_authenticate_message_full(
             &effective_domain,
             username,
-            nt_hash,
+            &nt_hash,
             &challenge_msg.challenge,
             challenge_msg.target_info.as_deref(),
-            None,
+            ntlm::NTLMSSP_CLIENT_FLAGS,
+            challenge_msg.flags,
+            &NtlmAuthConfig {
+                // Required when the DC enforces SPN target name validation.
+                service: Some("ldap"),
+                negotiate_message: Some(&negotiate),
+                challenge_message: Some(&ntlm_challenge),
+                include_version: true,
+                key_exchange: true,
+                client_challenge: None,
+            },
         );
-        let spnego_resp = smb2::wrap_spnego_response(&authenticate);
+
+        let signing = auth.signing_enabled();
+        if !signing {
+            warn!(
+                "RawLDAP: DC did not negotiate NTLM signing (challenge flags 0x{:08x}); \
+                 a DC with 'LDAP server signing requirements = Require signing' will \
+                 reject subsequent operations",
+                challenge_msg.flags
+            );
+        }
+        let mut signer = NtlmSigner::new(auth.flags, &auth.exported_session_key);
+
+        // The SPNEGO mechListMIC is required whenever integrity was negotiated.
+        // It is signed at sequence 0 over the DER mechType list and must not
+        // advance the message sequence (Windows signs it from a snapshot).
+        let spnego_resp = if signing {
+            let mic = signer.sign_mech_list_mic(smb2::SPNEGO_NTLMSSP_MECHLIST);
+            smb2::wrap_spnego_response_with_mic(&auth.message, &mic)
+        } else {
+            smb2::wrap_spnego_response(&auth.message)
+        };
+
         let id2 = self.next_msg_id();
         let req2 = build_bind_sasl(&mut [], id2, "GSS-SPNEGO", &spnego_resp);
         raw_ldap_send(&mut self.stream, &req2).await?;
 
-        // -- Step 5: Receive final BindResponse --
+        // -- Step 4: final BindResponse --
         let resp2 = raw_ldap_recv(&mut self.stream).await?;
-        let rc = parse_bind_response_rc(&resp2);
+        let (rc, _matched, diag) = parse_bind_response_result(&resp2);
         if rc != 0 {
             return Err(OverthroneError::Ldap {
-                target: "raw".to_string(),
-                reason: format!("NTLM SASL auth rejected (rc={rc}): invalid credentials"),
+                target: self.addr.clone(),
+                reason: format!(
+                    "NTLM SASL auth rejected (rc={rc}: {}). NetBIOS domain used: \
+                     '{effective_domain}'.{}",
+                    ldap_rc_to_string(rc as u32),
+                    if diag.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" Server said: {diag}")
+                    }
+                ),
             });
         }
 
-        // Store session key for signing subsequent LDAP messages
-        self.session_key = Some(session_key);
-        self.client_sign_seq = 0;
-        self.server_sign_seq = 0;
-
-        debug!("RawLDAP: GSS-SPNEGO bind succeeded (LDAP signing enabled)");
+        if signing {
+            info!(
+                "RawLDAP: GSS-SPNEGO bind OK -- SASL security layer active (signing{}, sealing{})",
+                "",
+                if signer.sealing() {
+                    "+encryption"
+                } else {
+                    " only"
+                }
+            );
+            self.signer = Some(signer);
+        } else {
+            debug!("RawLDAP: GSS-SPNEGO bind OK -- unsigned session");
+            self.signer = None;
+        }
         Ok(())
     }
 
@@ -343,12 +498,12 @@ impl RawLdapConn {
     ) -> crate::error::Result<Vec<ldap3::SearchEntry>> {
         let id = self.next_msg_id();
         let req = build_search_request(id, base, filter, attrs);
-        raw_ldap_send(&mut self.stream, &req).await?;
+        self.send_message(&req).await?;
 
         let mut entries: Vec<ldap3::SearchEntry> = Vec::new();
 
         loop {
-            let msg = raw_ldap_recv(&mut self.stream).await?;
+            let msg = self.recv_message().await?;
             match classify_ldap_message(&msg) {
                 LdapMsgKind::SearchEntry => {
                     if let Some(e) = parse_search_result_entry(&msg) {
@@ -387,14 +542,15 @@ impl RawLdapConn {
     }
 
     pub(crate) async fn disconnect(&mut self) {
-        // Send UnbindRequest (tag 0x42 = [APPLICATION 2] primitive)
+        // Send UnbindRequest (tag 0x42 = [APPLICATION 2] primitive), signed like
+        // every other PDU when the security layer is active.
         let id = self.next_msg_id();
         let mut msg_body = Vec::new();
         msg_body.extend_from_slice(&ber_integer(id));
         msg_body.push(0x42);
         msg_body.push(0);
         let unbind = ber_tlv(0x30, &msg_body);
-        let _ = raw_ldap_send(&mut self.stream, &unbind).await;
+        let _ = self.send_message(&unbind).await;
     }
 }
 
@@ -631,6 +787,23 @@ async fn raw_ldap_send(stream: &mut tokio::net::TcpStream, msg: &[u8]) -> crate:
         })
 }
 
+/// Read exactly `buf.len()` bytes, used for the SASL security layer framing
+/// (where the record starts with a 4-byte big-endian length).
+async fn raw_read_exact(
+    stream: &mut tokio::net::TcpStream,
+    buf: &mut [u8],
+) -> crate::error::Result<()> {
+    use tokio::io::AsyncReadExt;
+    stream
+        .read_exact(buf)
+        .await
+        .map_err(|e| OverthroneError::Ldap {
+            target: "raw".to_string(),
+            reason: format!("LDAP recv failed: {e}"),
+        })?;
+    Ok(())
+}
+
 async fn raw_ldap_recv(stream: &mut tokio::net::TcpStream) -> crate::error::Result<Vec<u8>> {
     use tokio::io::AsyncReadExt;
 
@@ -861,20 +1034,35 @@ fn parse_search_result_entry(msg: &[u8]) -> Option<ldap3::SearchEntry> {
     })
 }
 
-/// Parse the resultCode from a BindResponse [APPLICATION 1].
-fn parse_bind_response_rc(msg: &[u8]) -> u8 {
+/// Parse `resultCode`, `matchedDN` and `diagnosticMessage` from a BindResponse.
+///
+/// The diagnostic message is where a Windows DC explains *why* it refused a
+/// bind (e.g. "The server requires binds to turn on integrity checking if
+/// SSL/TLS are not already active on the connection"), so it is worth
+/// surfacing verbatim in errors.
+fn parse_bind_response_result(msg: &[u8]) -> (u8, String, String) {
     let mut off = 0usize;
     if let Some((_, seq_data)) = ber_read_tlv(msg, &mut off) {
         let mut inner = 0usize;
         ber_read_tlv(&seq_data, &mut inner); // skip messageID
         if let Some((_, op_data)) = ber_read_tlv(&seq_data, &mut inner) {
             let mut oi = 0usize;
-            if let Some((0x0A, rc_data)) = ber_read_tlv(&op_data, &mut oi) {
-                return rc_data.first().copied().unwrap_or(80);
-            }
+            let rc = match ber_read_tlv(&op_data, &mut oi) {
+                Some((0x0A, rc_data)) => rc_data.first().copied().unwrap_or(80),
+                _ => 80,
+            };
+            let matched_dn = match ber_read_tlv(&op_data, &mut oi) {
+                Some((0x04, dn)) => String::from_utf8_lossy(&dn).into_owned(),
+                _ => String::new(),
+            };
+            let diag = match ber_read_tlv(&op_data, &mut oi) {
+                Some((0x04, d)) => String::from_utf8_lossy(&d).into_owned(),
+                _ => String::new(),
+            };
+            return (rc, matched_dn, diag);
         }
     }
-    80 // generic error
+    (80, String::new(), String::new())
 }
 
 /// Parse SASL server credentials from a BindResponse (rc=14 = saslBindInProgress).
@@ -1696,8 +1884,15 @@ impl LdapSession {
                 let reason = ldap_rc_to_string(rc);
                 warn!("LDAP simple bind rejected (rc={rc}): {reason}");
 
-                if rc == 8 {
-                    info!("Attempting SASL NTLM bind fallback (strong auth required)");
+                if rc == 8 || rc == 49 {
+                    info!(
+                        "Attempting SASL NTLM bind fallback (rc={rc}: {})",
+                        if rc == 8 {
+                            "strong auth required"
+                        } else {
+                            "invalid credentials — may need NTLM"
+                        }
+                    );
                     drop(ldap);
                     Self::connect_with_sasl_ntlm(dc_ip, domain, username, password, use_tls).await
                 } else {
@@ -1736,8 +1931,16 @@ impl LdapSession {
         password: &str,
         use_tls: bool,
     ) -> Result<Self> {
-        let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
-        let addr = format!("{dc_ip}:{port}");
+        // The raw backend speaks plain LDAP on 389 and relies on the NTLM SASL
+        // security layer for integrity/confidentiality -- it has no TLS stack, so
+        // asking for TLS here must not silently connect to 636 in cleartext.
+        if use_tls {
+            info!(
+                "LDAP SASL NTLM backend has no TLS support; using port {LDAP_PORT} with \
+                 NTLM signing+sealing instead of LDAPS"
+            );
+        }
+        let addr = format!("{dc_ip}:{LDAP_PORT}");
         info!("Connecting to LDAP (SASL NTLM): {addr}");
 
         // Convert password to NT hash for raw NTLM bind
@@ -1812,9 +2015,15 @@ impl LdapSession {
                 let rc = res.rc;
                 let reason = ldap_rc_to_string(rc);
                 warn!("GC simple bind rejected (rc={rc}): {reason}");
-                // WS2022/2025: fall back to SASL NTLM bind
-                if rc == 8 {
-                    info!("Attempting GC SASL NTLM bind fallback");
+                if rc == 8 || rc == 49 {
+                    info!(
+                        "Attempting GC SASL NTLM bind fallback (rc={rc}: {})",
+                        if rc == 8 {
+                            "strong auth required"
+                        } else {
+                            "invalid credentials — may need NTLM"
+                        }
+                    );
                     drop(ldap);
                     Self::connect_gc_with_sasl_ntlm(dc_ip, domain, username, password, use_tls)
                         .await
@@ -2000,8 +2209,15 @@ impl LdapSession {
             }
         })?;
 
-        let port = if use_tls { LDAPS_PORT } else { LDAP_PORT };
-        let addr = format!("{dc_ip}:{port}");
+        if use_tls {
+            info!(
+                "LDAP SASL NTLM backend has no TLS support; using port {LDAP_PORT} with NTLM \
+                 signing+sealing instead of LDAPS"
+            );
+        }
+        // Plaintext port: the NTLM SASL security layer provides both integrity
+        // and confidentiality, which is what a signing-required DC demands.
+        let addr = format!("{dc_ip}:{LDAP_PORT}");
         info!("Connecting to LDAP (raw/NTLM): {addr}");
         let mut raw = RawLdapConn::connect(&addr).await?;
         raw.ntlm_bind(domain, username, &nt_hash).await?;
@@ -2037,6 +2253,18 @@ impl LdapSession {
     /// direct control over controls and paging.
     pub fn raw_ldap(&mut self) -> Option<&mut ldap3::Ldap> {
         self.ldap.as_mut()
+    }
+
+    /// True when this session carries a NTLM SASL security layer, i.e. the DC
+    /// accepted an integrity-protected bind. Sessions that fall back to an
+    /// unsigned SASL bind are refused outright by a DC that requires signing.
+    pub fn is_signed(&self) -> bool {
+        self.raw.as_ref().is_some_and(|r| r.is_signed())
+    }
+
+    /// True when the SASL layer also encrypts the payloads (NTLM sealing).
+    pub fn is_sealed(&self) -> bool {
+        self.raw.as_ref().is_some_and(|r| r.is_sealed())
     }
 
     // =======================================================
@@ -2494,6 +2722,15 @@ impl LdapSession {
                         || msg.contains("eof")
                     {
                         warn!("LDAP connection lost: {e}");
+                        // A dropped connection tears down the SASL sign/seal
+                        // context too, so the bind has to be replayed before the
+                        // retry can succeed.
+                        if let Some(raw) = self.raw.as_mut() {
+                            match raw.rebind().await {
+                                Ok(()) => debug!("LDAP: re-bound after connection loss"),
+                                Err(e) => warn!("LDAP: rebind after connection loss failed: {e}"),
+                            }
+                        }
                         last_err = Some(e);
                         continue;
                     }
@@ -3598,6 +3835,193 @@ impl LdapSession {
 }
 
 #[cfg(test)]
+mod live_probe {
+    //! Live diagnostics for the NTLM SASL handshake.
+    //!
+    //! These probe *what a real DC accepts* rather than asserting a fixed
+    //! expectation, which is how the flag set and payload layout below were
+    //! validated against Windows Server 2019/2022/2025:
+    //!
+    //! ```text
+    //! OT_DC_HOST=192.168.5.200 cargo test -p overthrone-core --lib \
+    //!   proto::ldap::live_probe -- --ignored --nocapture
+    //! ```
+    use super::*;
+    use crate::proto::ntlm;
+    use crate::proto::smb2;
+
+    fn host() -> String {
+        std::env::var("OT_DC_HOST").unwrap_or_else(|_| "192.168.5.200".into())
+    }
+
+    /// Send a bare GSS-SPNEGO NEGOTIATE and report what the DC answers.
+    /// A DC that likes the token replies rc=14 (saslBindInProgress).
+    async fn probe(label: &str, type1: Vec<u8>, domain: &str) {
+        let addr = format!("{}:{LDAP_PORT}", host());
+        let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await else {
+            println!("[{label}] SKIP: cannot connect to {addr}");
+            return;
+        };
+        // MS-NLMP 2.2.1.1: NegotiateFlags immediately follow MessageType.
+        let flags = u32::from_le_bytes([type1[12], type1[13], type1[14], type1[15]]);
+        let spnego = smb2::wrap_spnego_init(&type1);
+        let bind = build_bind_sasl(&mut [], 1, "GSS-SPNEGO", &spnego);
+        if raw_ldap_send(&mut stream, &bind).await.is_err() {
+            println!("[{label}] send failed");
+            return;
+        }
+        match raw_ldap_recv(&mut stream).await {
+            Ok(resp) => {
+                let (rc, _dn, diag) = parse_bind_response_result(&resp);
+                println!(
+                    "[{label}] type1={} bytes flags=0x{flags:08x} domain='{domain}' -> rc={rc} {diag}",
+                    type1.len()
+                );
+            }
+            Err(e) => println!("[{label}] recv failed: {e}"),
+        }
+    }
+
+    /// Drive the full 3-step GSS-SPNEGO handshake with variations of the final
+    /// AUTHENTICATE token, reporting the rc the DC answers with. Isolates which
+    /// part of the token the DC objects to.
+    async fn probe_full_handshake(label: &str, include_version: bool, mech_mic: bool) {
+        use crate::proto::ntlm::{self, NtlmAuthConfig};
+        let addr = format!("{}:{LDAP_PORT}", host());
+        let Ok(mut stream) = tokio::net::TcpStream::connect(&addr).await else {
+            println!("[{label}] SKIP: cannot connect to {addr}");
+            return;
+        };
+        let domain = "LAINOSCP";
+        let nt_hash = ntlm::nt_hash("GoldSeagull123");
+
+        let negotiate = ntlm::build_negotiate_message_ex(domain, include_version);
+        let spnego_init = smb2::wrap_spnego_init(&negotiate);
+        let req1 = build_bind_sasl(&mut [], 1, "GSS-SPNEGO", &spnego_init);
+        if raw_ldap_send(&mut stream, &req1).await.is_err() {
+            println!("[{label}] send(type1) failed");
+            return;
+        }
+        let Ok(resp1) = raw_ldap_recv(&mut stream).await else {
+            println!("[{label}] recv(type1) failed");
+            return;
+        };
+        let (rc1, _, diag1) = parse_bind_response_result(&resp1);
+        if rc1 != 14 {
+            println!("[{label}] negotiate rc={rc1} {diag1}");
+            return;
+        }
+        println!(
+            "[{label}] challenge bindResponse: {:02x?}",
+            &resp1[..resp1.len().min(96)]
+        );
+        let Ok(creds) = parse_bind_response_sasl(&resp1) else {
+            println!("[{label}] no SASL creds in response");
+            return;
+        };
+        println!(
+            "[{label}] challenge sasl creds: {:02x?}",
+            &creds[..creds.len().min(48)]
+        );
+        let Ok(challenge_bytes) = smb2::extract_ntlmssp_from_spnego(&creds) else {
+            println!("[{label}] no NTLMSSP token in challenge");
+            return;
+        };
+        let Ok(challenge) = ntlm::parse_challenge_message(&challenge_bytes) else {
+            println!("[{label}] challenge parse failed");
+            return;
+        };
+        let effective_domain = challenge
+            .target_info
+            .as_deref()
+            .and_then(extract_nb_domain_from_target_info)
+            .unwrap_or_else(|| domain.to_uppercase());
+
+        let auth = ntlm::build_authenticate_message_full(
+            &effective_domain,
+            "shannon",
+            &nt_hash,
+            &challenge.challenge,
+            challenge.target_info.as_deref(),
+            ntlm::NTLMSSP_CLIENT_FLAGS,
+            challenge.flags,
+            &NtlmAuthConfig {
+                service: Some("ldap"),
+                negotiate_message: Some(&negotiate),
+                challenge_message: Some(&challenge_bytes),
+                include_version,
+                key_exchange: true,
+                client_challenge: None,
+            },
+        );
+        println!(
+            "[{label}] type3={} bytes mic={:?}",
+            auth.message.len(),
+            auth.mic.as_ref().map(|m| m.len())
+        );
+        println!("[{label}] type3 hdr: {:02x?}", &auth.message[..96]);
+        let spnego_resp = if mech_mic {
+            let mut signer = ntlm::NtlmSigner::new(auth.flags, &auth.exported_session_key);
+            let mic = signer.sign_mech_list_mic(smb2::SPNEGO_NTLMSSP_MECHLIST);
+            smb2::wrap_spnego_response_with_mic(&auth.message, &mic)
+        } else {
+            smb2::wrap_spnego_response(&auth.message)
+        };
+        println!(
+            "[{label}] spnego req2: {:02x?}",
+            &spnego_resp[..spnego_resp.len().min(32)]
+        );
+        let req2 = build_bind_sasl(&mut [], 2, "GSS-SPNEGO", &spnego_resp);
+        if raw_ldap_send(&mut stream, &req2).await.is_err() {
+            println!("[{label}] send(type3) failed");
+            return;
+        }
+        match raw_ldap_recv(&mut stream).await {
+            Ok(resp) => {
+                let (rc, _, diag) = parse_bind_response_result(&resp);
+                println!("[{label}] authenticate rc={rc} {diag}");
+            }
+            Err(e) => println!("[{label}] recv(type3) failed: {e}"),
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live DC"]
+    async fn probe_full_handshake_variants() {
+        probe_full_handshake("version+mic+mechListMIC", true, true).await;
+        probe_full_handshake("version+mic, no mechListMIC", true, false).await;
+        probe_full_handshake("no version, no MIC", false, false).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires live DC"]
+    async fn probe_ntlm_negotiate_variants() {
+        let variants: Vec<(&str, u32, &str)> = vec![
+            ("client-flags + version + domain", 0, "LAINOSCP"),
+            ("client-flags + version, no domain", 1, ""),
+            ("client-flags, no version, no domain", 2, ""),
+            ("client-flags, no version, domain", 3, "LAINOSCP"),
+            ("no key-exch", 4, ""),
+        ];
+        for (label, kind, domain) in variants {
+            let base = ntlm::NTLMSSP_CLIENT_FLAGS | ntlm::NTLMSSP_NEGOTIATE_VERSION;
+            let flags = match kind {
+                0 => base,
+                1 => base,
+                2 => ntlm::NTLMSSP_CLIENT_FLAGS,
+                3 => ntlm::NTLMSSP_CLIENT_FLAGS,
+                _ => {
+                    ntlm::NTLMSSP_CLIENT_FLAGS
+                        | ntlm::NTLMSSP_NEGOTIATE_VERSION & !ntlm::NTLMSSP_NEGOTIATE_KEY_EXCH
+                }
+            };
+            let type1 = ntlm::build_negotiate_message_with_flags(domain, flags);
+            probe(label, type1, domain).await;
+        }
+    }
+}
+
+#[cfg(test)]
 impl LdapSession {
     /// Build an unbound LDAP session for unit tests that need a `LdapSession`
     /// value but do not perform actual network I/O.
@@ -4396,7 +4820,7 @@ mod tests {
         assert_eq!(classify_ldap_message(&[0x00]), LdapMsgKind::Other);
     }
 
-    // -- parse_bind_response_rc --
+    // -- parse_bind_response_result --
 
     #[test]
     fn test_parse_bind_response_rc_success() {
@@ -4415,7 +4839,7 @@ mod tests {
             m.extend_from_slice(&inner);
             ber_sequence(&m)
         };
-        assert_eq!(parse_bind_response_rc(&msg), 0);
+        assert_eq!(parse_bind_response_result(&msg).0, 0);
     }
 
     #[test]
@@ -4433,12 +4857,12 @@ mod tests {
             m.extend_from_slice(&inner);
             ber_sequence(&m)
         };
-        assert_eq!(parse_bind_response_rc(&msg), 49);
+        assert_eq!(parse_bind_response_result(&msg).0, 49);
     }
 
     #[test]
     fn test_parse_bind_response_rc_garbage() {
-        assert_eq!(parse_bind_response_rc(&[0x00, 0x01, 0x02]), 80);
+        assert_eq!(parse_bind_response_result(&[0x00, 0x01, 0x02]).0, 80);
     }
 
     // -- parse_bind_response_sasl --

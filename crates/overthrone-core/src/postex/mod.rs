@@ -49,8 +49,8 @@ pub use browser_creds::{
     extract_browser_credentials,
 };
 pub use certighost::{
-    CertighostConfig, CertighostError, CertighostResult, build_csr, certighost_auto_enroll,
-    certighost_enroll,
+    CertighostConfig, CertighostError, CertighostResult, WSTEP_RST_ACTION, WstepResponse,
+    build_csr, build_wstep_rst, certighost_auto_enroll, certighost_enroll, parse_wstep_response,
 };
 pub use cg_check::{
     CgPreflightResult, CgSignal, ComprehensiveCgResult, CredentialGuardStatus, DomainCgAssessment,

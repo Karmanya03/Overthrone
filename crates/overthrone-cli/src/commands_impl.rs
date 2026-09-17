@@ -8382,6 +8382,10 @@ pub async fn cmd_certighost(
         san: san.map(|s| s.to_string()),
         key_size: 2048,
         dry_run,
+        domain: cli.domain.clone().unwrap_or_default(),
+        username: cli.username.clone().unwrap_or_default(),
+        password: cli.password.clone().unwrap_or_default(),
+        timeout_secs: 60,
     };
 
     println!(
@@ -8391,18 +8395,9 @@ pub async fn cmd_certighost(
         template.cyan()
     );
 
-    let config = config.clone();
-    let result = match tokio::task::spawn_blocking(move || {
-        overthrone_core::postex::certighost_auto_enroll(&config)
-    })
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            banner::print_fail(&format!("Certighost task failed: {e}"));
-            return 1;
-        }
-    };
+    // Enrollment is async (async reqwest + the NTLM-capable `/certsrv` fallback),
+    // so it runs on the current runtime rather than a blocking task.
+    let result = overthrone_core::postex::certighost_auto_enroll(&config).await;
 
     match result {
         Ok(r) => {

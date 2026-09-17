@@ -525,11 +525,11 @@ async fn run_drs_operations(
 
     let drs_uuid = parse_uuid(MS_DRSR_UUID)?;
     let bind_req = crate::proto::epm::build_rpc_bind(&drs_uuid, MS_DRSR_VERSION, 0);
-    crate::proto::epm::btf_write_frame(&mut stream, &bind_req)
+    crate::proto::epm::tcp_write_pdu(&mut stream, &bind_req)
         .await
         .map_err(|e| DcShadowError::BindError(format!("bind write: {e}")))?;
 
-    let bind_resp = crate::proto::epm::btf_read_frame(&mut stream)
+    let bind_resp = crate::proto::epm::tcp_read_pdu(&mut stream)
         .await
         .map_err(|e| DcShadowError::BindError(format!("bind read: {e}")))?;
 
@@ -540,10 +540,10 @@ async fn run_drs_operations(
     // DRSBind
     let drs_bind_stub = build_drs_bind_request(&DRS_BIND_GUID, DRS_EXTENSIONS_INT);
     let drs_bind_pdu = crate::proto::epm::build_rpc_request(0, &drs_bind_stub);
-    crate::proto::epm::btf_write_frame(&mut stream, &drs_bind_pdu)
+    crate::proto::epm::tcp_write_pdu(&mut stream, &drs_bind_pdu)
         .await
         .map_err(|e| DcShadowError::BindError(format!("DRSBind write: {e}")))?;
-    let _bind_resp = crate::proto::epm::btf_read_frame(&mut stream)
+    let _bind_resp = crate::proto::epm::tcp_read_pdu(&mut stream)
         .await
         .map_err(|e| DcShadowError::BindError(format!("DRSBind read: {e}")))?;
 
@@ -552,10 +552,10 @@ async fn run_drs_operations(
     if !config.objects_to_push.is_empty() {
         let add_stub = build_drs_add_entry_request(&config.objects_to_push);
         let add_pdu = crate::proto::epm::build_rpc_request(5, &add_stub);
-        crate::proto::epm::btf_write_frame(&mut stream, &add_pdu)
+        crate::proto::epm::tcp_write_pdu(&mut stream, &add_pdu)
             .await
             .map_err(|e| DcShadowError::AddEntryError(format!("DRSAddEntry write: {e}")))?;
-        let _ = crate::proto::epm::btf_read_frame(&mut stream)
+        let _ = crate::proto::epm::tcp_read_pdu(&mut stream)
             .await
             .map_err(|e| DcShadowError::AddEntryError(format!("DRSAddEntry read: {e}")))?;
         for obj in &config.objects_to_push {
@@ -567,10 +567,10 @@ async fn run_drs_operations(
     let nc_dn = domain_to_dn(&config.domain);
     let repl_stub = build_drs_replica_add_request(&nc_dn, 0x0000_0001);
     let repl_pdu = crate::proto::epm::build_rpc_request(1, &repl_stub);
-    crate::proto::epm::btf_write_frame(&mut stream, &repl_pdu)
+    crate::proto::epm::tcp_write_pdu(&mut stream, &repl_pdu)
         .await
         .map_err(|e| DcShadowError::ReplicaError(format!("DRSReplicaAdd write: {e}")))?;
-    let _ = crate::proto::epm::btf_read_frame(&mut stream)
+    let _ = crate::proto::epm::tcp_read_pdu(&mut stream)
         .await
         .map_err(|e| DcShadowError::ReplicaError(format!("DRSReplicaAdd read: {e}")))?;
 

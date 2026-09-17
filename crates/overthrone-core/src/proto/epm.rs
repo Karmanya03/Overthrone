@@ -761,6 +761,251 @@ fn parse_epm_endpoints(resp: &[u8]) -> Vec<EpEndpoint> {
 }
 
 // ===========================================================
+//  SRVSVC NetrServerGetInfo (opnum 21) -- real DC build number
+// ===========================================================
+
+/// `SERVER_INFO_101` as returned by SRVSVC `NetrServerGetInfo` (opnum 21).
+///
+/// This is the same source traditional tooling (smbclient, NetExec) uses to
+/// derive the remote OS release: `sv101_version_minor` is the Windows build
+/// number, e.g. 20348 for Windows Server 2022.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SrvsvcServerInfo {
+    /// `sv101_platform_id` -- 500 = Windows NT family.
+    pub platform_id: u32,
+    /// NetBIOS name reported by the server.
+    pub name: Option<String>,
+    /// `sv101_version_major` (10 for Windows 10/Server 2016+).
+    pub version_major: u32,
+    /// `sv101_version_minor` -- the Windows **build** number.
+    pub version_minor: u32,
+    /// `sv101_type` bitmask (workstation/server/DC role flags).
+    pub server_type: u32,
+    /// Free-text server comment.
+    pub comment: Option<String>,
+}
+
+impl SrvsvcServerInfo {
+    /// Windows build number (`sv101_version_minor`).
+    pub fn build(&self) -> u32 {
+        self.version_minor
+    }
+
+    /// Best-effort marketing name for the detected build.
+    pub fn release_name(&self) -> &'static str {
+        windows_server_release(self.version_minor)
+    }
+
+    /// `10.0.20348`-style version string.
+    pub fn version_string(&self) -> String {
+        format!("{}.0.{}", self.version_major, self.version_minor)
+    }
+}
+
+/// Map a Windows build number to its marketing release name.
+///
+/// Only releases that matter for AD tooling are listed; anything older than
+/// Server 2008 R2 is reported as a generic label rather than guessed at.
+pub fn windows_server_release(build: u32) -> &'static str {
+    match build {
+        b if b >= 26100 => "Windows Server 2025",
+        b if b >= 20348 => "Windows Server 2022",
+        b if b >= 17763 => "Windows Server 2019",
+        b if b >= 14393 => "Windows Server 2016",
+        b if b >= 9600 => "Windows Server 2012 R2",
+        b if b >= 9200 => "Windows Server 2012",
+        b if b >= 7600 => "Windows Server 2008 R2",
+        _ => "Windows (pre-2008 R2 / unknown)",
+    }
+}
+
+/// Build a SRVSVC `NetrServerGetInfo` (opnum 21) request stub.
+///
+/// NDR wire layout (32-bit little-endian):
+/// ```text
+/// ServerName : [unique, string] referent (4)  -- 0 when server is empty
+/// Level      : DWORD (4)
+/// [deferred] ServerName conformant varying string:
+///              max_count(4) + offset(4) + actual_count(4) + UTF-16LE + NUL
+/// ```
+/// Note the deferred string follows `Level`; inlining it before `Level` (as an
+/// earlier helper in this file does) produces a non-conformant stub.
+pub fn build_srvsvc_net_server_get_info_req(server: &str, level: u32) -> Vec<u8> {
+    let unc = if server.is_empty() {
+        String::new()
+    } else {
+        format!("\\\\{server}")
+    };
+
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&(if unc.is_empty() { 0u32 } else { 0x0002_0000u32 }).to_le_bytes());
+    stub.extend_from_slice(&level.to_le_bytes());
+
+    if !unc.is_empty() {
+        let count = unc.encode_utf16().count() as u32 + 1; // include NUL
+        stub.extend_from_slice(&count.to_le_bytes()); // max_count
+        stub.extend_from_slice(&0u32.to_le_bytes()); // offset
+        stub.extend_from_slice(&count.to_le_bytes()); // actual_count
+        for c in unc.encode_utf16() {
+            stub.extend_from_slice(&c.to_le_bytes());
+        }
+        stub.extend_from_slice(&[0x00, 0x00]); // NUL terminator
+        while !stub.len().is_multiple_of(4) {
+            stub.push(0);
+        }
+    }
+
+    build_rpc_request(21, &stub)
+}
+
+/// Read a little-endian u32 at `off`, or `None` if out of bounds.
+fn rd_u32(buf: &[u8], off: usize) -> Option<u32> {
+    let end = off.checked_add(4)?;
+    let bytes = buf.get(off..end)?;
+    Some(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]))
+}
+
+/// Decode an NDR conformant varying UTF-16 string at `off`.
+/// Returns the decoded value (if `actual_count > 0`) and the offset just past
+/// the pointee, so callers can walk deferred members in order.
+fn read_cv_string(buf: &[u8], off: usize) -> (Option<String>, usize) {
+    let max_count = match rd_u32(buf, off) {
+        Some(v) => v as usize,
+        None => return (None, off),
+    };
+    let actual_count = match rd_u32(buf, off + 8) {
+        Some(v) => v as usize,
+        None => return (None, off),
+    };
+    let data_off = off + 12;
+    if actual_count == 0 || actual_count > max_count || actual_count > 1024 {
+        return (None, data_off);
+    }
+    let byte_len = actual_count.saturating_mul(2);
+    let bytes = match buf.get(data_off..data_off + byte_len) {
+        Some(b) => b,
+        None => return (None, data_off),
+    };
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .take_while(|u| *u != 0)
+        .collect();
+    // Pointee is padded to a 4-byte boundary.
+    let mut next = data_off + byte_len;
+    next = (next + 3) & !3;
+    (Some(String::from_utf16_lossy(&units)), next)
+}
+
+/// Parse a `SERVER_INFO_101` fixed part starting at `base`.
+fn parse_server_info_101_at(s: &[u8], base: usize) -> Option<SrvsvcServerInfo> {
+    let platform_id = rd_u32(s, base)?;
+    let name_ref = rd_u32(s, base + 4)?;
+    let version_major = rd_u32(s, base + 8)?;
+    let version_minor = rd_u32(s, base + 12)?;
+    let server_type = rd_u32(s, base + 16)?;
+    let comment_ref = rd_u32(s, base + 20)?;
+
+    // Deferred strings, in declaration order.
+    let mut cursor = base + 24;
+    let mut name = None;
+    if name_ref != 0 {
+        let (v, next) = read_cv_string(s, cursor);
+        name = v;
+        cursor = next;
+    }
+    let mut comment = None;
+    if comment_ref != 0 {
+        let (v, _) = read_cv_string(s, cursor);
+        comment = v;
+    }
+
+    Some(SrvsvcServerInfo {
+        platform_id,
+        name,
+        version_major,
+        version_minor,
+        server_type,
+        comment,
+    })
+}
+
+/// Does this candidate actually look like a valid `SERVER_INFO_101`?
+///
+/// NDR marshals a `switch_is(Level)` union whose discriminant is already an
+/// in-parameter, so implementations differ on whether a leading `101`
+/// discriminant appears on the wire. We probe both layouts and accept only a
+/// payload whose version fields are internally plausible -- this is what keeps
+/// callers from treating garbage as a version and then reporting a host as
+/// exploitable.
+fn is_plausible_server_info(info: &SrvsvcServerInfo) -> bool {
+    (5..=10).contains(&info.version_major)
+        && (2600..=40000).contains(&info.version_minor)
+        && (info.platform_id == 0 || info.platform_id == 500)
+}
+
+/// Parse a SRVSVC `NetrServerGetInfo` (level 101) response.
+///
+/// Returns `None` when the payload is not a valid `SERVER_INFO_101`, so callers
+/// can distinguish "could not determine" from "determined and patched".
+pub fn parse_srvsvc_server_info(resp: &[u8]) -> Option<SrvsvcServerInfo> {
+    const HDR: usize = 24; // DCE/RPC response header
+    let s = resp.get(HDR..)?;
+    // The `SERVER_INFO_101` fixed part starts at offset 4 (after the return
+    // code) and is 24 bytes, so we need 28 bytes minimum. Deferred strings are
+    // optional -- a missing pointee yields `None` for that field, not a parse
+    // failure, because the build number is already known at that point.
+    if s.len() < 28 {
+        return None;
+    }
+    let return_code = rd_u32(s, 0)?;
+    if return_code != 0 {
+        debug!("SRVSVC NetrServerGetInfo: return_code = 0x{return_code:08x}");
+        return None;
+    }
+
+    // Layout A: no union discriminant on the wire (impacket-compatible).
+    if let Some(info) = parse_server_info_101_at(s, 4)
+        && is_plausible_server_info(&info)
+    {
+        return Some(info);
+    }
+
+    // Layout B: discriminant present before the union arm.
+    if rd_u32(s, 4)? == 101
+        && let Some(info) = parse_server_info_101_at(s, 8)
+        && is_plausible_server_info(&info)
+    {
+        return Some(info);
+    }
+
+    debug!("SRVSVC NetrServerGetInfo: no plausible SERVER_INFO_101 in response");
+    None
+}
+
+/// Query SRVSVC `NetrServerGetInfo` level 101 on an established SMB session.
+///
+/// `server` should be the NetBIOS or DNS name of the target; pass an empty
+/// string to let the server describe itself (which works for most DCs).
+pub async fn net_server_get_info(smb: &SmbSession, server: &str) -> Result<SrvsvcServerInfo> {
+    let bind_req = build_rpc_bind(&SRVSVC_UUID, 3, 0);
+    let bind_resp = smb.pipe_transact("srvsvc", &bind_req).await?;
+    if !is_bind_accepted(&bind_resp) {
+        return Err(OverthroneError::Rpc {
+            target: "srvsvc".to_string(),
+            reason: "Bind rejected".to_string(),
+        });
+    }
+
+    let req = build_srvsvc_net_server_get_info_req(server, 101);
+    let resp = smb.pipe_transact("srvsvc", &req).await?;
+    parse_srvsvc_server_info(&resp).ok_or_else(|| OverthroneError::Rpc {
+        target: "srvsvc".to_string(),
+        reason: "NetrServerGetInfo returned no parseable SERVER_INFO_101".to_string(),
+    })
+}
+
+// ===========================================================
 //  Main Entry Point
 // ===========================================================
 
@@ -904,39 +1149,74 @@ async fn enumerate_epmapper(smb: &SmbSession) -> Result<Vec<EpEndpoint>> {
 //  TCP-based EPM resolution
 // ===========================================================
 
-/// Write a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
-pub async fn btf_write_frame(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
-    let len = (pdu.len() as u32).to_le_bytes();
-    stream
-        .write_all(&len)
-        .await
-        .map_err(|e| OverthroneError::custom(format!("BTF write failed: {e}")))?;
+/// Write one DCE/RPC PDU to a direct TCP connection (`ncacn_ip_tcp`).
+///
+/// PDUs on a raw TCP connection are **not** preceded by a length field -- each
+/// PDU is self-delimiting through the `frag_length` field in its common header.
+/// (The 4-byte little-endian length prefix only applies to `ncacn_np`, i.e.
+/// DCE/RPC tunneled through SMB named pipes.) Writing a prefix here makes the
+/// server interpret it as the PDU header and drop the connection, which is why
+/// Endpoint Mapper binds used to time out.
+pub async fn tcp_write_pdu(stream: &mut TcpStream, pdu: &[u8]) -> Result<()> {
     stream
         .write_all(pdu)
         .await
-        .map_err(|e| OverthroneError::custom(format!("BTF write PDU failed: {e}")))?;
+        .map_err(|e| OverthroneError::custom(format!("RPC TCP write PDU failed: {e}")))?;
+    stream
+        .flush()
+        .await
+        .map_err(|e| OverthroneError::custom(format!("RPC TCP flush failed: {e}")))?;
     Ok(())
 }
 
 /// Read a DCE/RPC PDU with BTF (4-byte LE length prefix) framing over TCP.
-pub async fn btf_read_frame(stream: &mut TcpStream) -> Result<Vec<u8>> {
-    let mut len_buf = [0u8; 4];
-    stream
-        .read_exact(&mut len_buf)
-        .await
-        .map_err(|e| OverthroneError::custom(format!("BTF read length failed: {e}")))?;
-    let len = u32::from_le_bytes(len_buf) as usize;
-    if len > 1_048_576 {
+/// Validate a DCE/RPC common header and return the PDU's total length
+/// (`frag_length`).
+///
+/// A well-formed header starts with version 5 and declares a `frag_length` of at
+/// least 16 bytes. Anything else means the stream is not aligned on a PDU
+/// boundary -- for example because a named-pipe length prefix was mistakenly
+/// written onto a `ncacn_ip_tcp` connection.
+fn pdu_length_from_header(header: &[u8; 16]) -> Result<usize> {
+    if header[0] != 5 {
         return Err(OverthroneError::custom(format!(
-            "BTF frame too large: {len} bytes"
+            "RPC: unexpected PDU version {} (expected 5.0) -- stream is not PDU-aligned",
+            header[0]
         )));
     }
-    let mut buf = vec![0u8; len];
+    let frag_len = u16::from_le_bytes([header[8], header[9]]) as usize;
+    if !(16..=1_048_576).contains(&frag_len) {
+        return Err(OverthroneError::custom(format!(
+            "RPC: invalid frag_length {frag_len}"
+        )));
+    }
+    Ok(frag_len)
+}
+
+/// Read one DCE/RPC PDU from a direct TCP connection.
+///
+/// Reads the 16-byte common header, then exactly `frag_length` total bytes, so
+/// the framing is driven by the PDU itself rather than an external length
+/// prefix. Multi-fragment responses are returned one fragment at a time; the
+/// EPM responses used here are always a single fragment.
+pub async fn tcp_read_pdu(stream: &mut TcpStream) -> Result<Vec<u8>> {
+    let mut header = [0u8; 16];
     stream
-        .read_exact(&mut buf)
+        .read_exact(&mut header)
         .await
-        .map_err(|e| OverthroneError::custom(format!("BTF read data failed: {e}")))?;
-    Ok(buf)
+        .map_err(|e| OverthroneError::custom(format!("RPC TCP read header failed: {e}")))?;
+
+    let frag_len = pdu_length_from_header(&header)?;
+
+    let mut pdu = header.to_vec();
+    if frag_len > pdu.len() {
+        pdu.resize(frag_len, 0);
+        stream
+            .read_exact(&mut pdu[16..])
+            .await
+            .map_err(|e| OverthroneError::custom(format!("RPC TCP read body failed: {e}")))?;
+    }
+    Ok(pdu)
 }
 
 /// Build an ept_map (opnum 3) request for a specific interface UUID.
@@ -1053,9 +1333,9 @@ pub async fn resolve_uuid_via_epm_tcp(
 
     // Bind to EPM v3.0
     let bind_req = build_rpc_bind(&EPMAPPER_UUID, 3, 0);
-    btf_write_frame(&mut stream, &bind_req).await?;
+    tcp_write_pdu(&mut stream, &bind_req).await?;
 
-    let bind_resp = btf_read_frame(&mut stream).await?;
+    let bind_resp = tcp_read_pdu(&mut stream).await?;
     if !is_bind_accepted(&bind_resp) {
         let resp_len = bind_resp.len();
         return Err(OverthroneError::custom(format!(
@@ -1065,9 +1345,9 @@ pub async fn resolve_uuid_via_epm_tcp(
 
     // ept_map (opnum 3) for the target interface
     let map_req = build_ept_map_request_uuid(interface_uuid);
-    btf_write_frame(&mut stream, &map_req).await?;
+    tcp_write_pdu(&mut stream, &map_req).await?;
 
-    let map_resp = btf_read_frame(&mut stream).await?;
+    let map_resp = tcp_read_pdu(&mut stream).await?;
     let port = parse_ept_map_tcp_port(&map_resp);
 
     if port == 0 {
@@ -1162,10 +1442,10 @@ pub async fn resolve_uuid_via_epm_tcp_auth(
         base_len,
         type1.len()
     );
-    btf_write_frame(&mut stream, &bind_pdu).await?;
+    tcp_write_pdu(&mut stream, &bind_pdu).await?;
 
     // Receive bind_ack with NTLM Type 2 challenge in auth verifier
-    let bind_resp = btf_read_frame(&mut stream).await?;
+    let bind_resp = tcp_read_pdu(&mut stream).await?;
     if !is_bind_accepted(&bind_resp) {
         let resp_len = bind_resp.len();
         return Err(OverthroneError::custom(format!(
@@ -1217,13 +1497,13 @@ pub async fn resolve_uuid_via_epm_tcp_auth(
 
     // Send AUTH3 PDU with Type 3
     let auth3_pdu = build_auth3_pdu(&type3, auth_level);
-    btf_write_frame(&mut stream, &auth3_pdu).await?;
+    tcp_write_pdu(&mut stream, &auth3_pdu).await?;
 
     // Now authenticated -- send ept_map for the target interface
     let map_req = build_ept_map_request_uuid(interface_uuid);
-    btf_write_frame(&mut stream, &map_req).await?;
+    tcp_write_pdu(&mut stream, &map_req).await?;
 
-    let map_resp = btf_read_frame(&mut stream).await?;
+    let map_resp = tcp_read_pdu(&mut stream).await?;
     let port = parse_ept_map_tcp_port(&map_resp);
 
     if port == 0 {
@@ -1310,16 +1590,11 @@ pub async fn probe_epm(target: &str) -> Result<String> {
     };
 
     let bind_req = build_rpc_bind(&EPMAPPER_UUID, 3, 0);
-    if let Err(e) = btf_write_frame(&mut stream, &bind_req).await {
+    if let Err(e) = tcp_write_pdu(&mut stream, &bind_req).await {
         return Ok(format!("EPM bind write failed: {e}"));
     }
 
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        btf_read_frame(&mut stream),
-    )
-    .await
-    {
+    match tokio::time::timeout(std::time::Duration::from_secs(5), tcp_read_pdu(&mut stream)).await {
         Ok(Ok(resp)) => {
             if is_bind_accepted(&resp) {
                 Ok("EPM v3.0 -- bind accepted".to_string())
@@ -1360,5 +1635,179 @@ mod tests {
         assert!(!encoded.is_empty());
         // Should contain UTF-16 encoded "test\0"
         assert!(encoded.windows(2).any(|w| w == [b't', 0]));
+    }
+
+    // -- SRVSVC NetrServerGetInfo (opnum 21) --
+
+    /// Build a synthetic `NetrServerGetInfo` level-101 response.
+    /// When `with_discriminant` is true a leading `101` union discriminant is
+    /// inserted at offset 4 (the layout some stacks emit).
+    fn build_server_info_response(
+        major: u32,
+        minor: u32,
+        name: Option<&str>,
+        comment: Option<&str>,
+        with_discriminant: bool,
+        return_code: u32,
+    ) -> Vec<u8> {
+        let mut buf = vec![0u8; 24]; // DCE/RPC response header
+        buf.extend_from_slice(&return_code.to_le_bytes());
+        if with_discriminant {
+            buf.extend_from_slice(&101u32.to_le_bytes());
+        }
+        buf.extend_from_slice(&500u32.to_le_bytes()); // platform_id
+        buf.extend_from_slice(&(if name.is_some() { 0x0002_0000u32 } else { 0 }).to_le_bytes());
+        buf.extend_from_slice(&major.to_le_bytes());
+        buf.extend_from_slice(&minor.to_le_bytes());
+        buf.extend_from_slice(&0x0000_0010u32.to_le_bytes()); // sv101_type
+        buf.extend_from_slice(&(if comment.is_some() { 0x0002_0004u32 } else { 0 }).to_le_bytes());
+        for s in [name, comment].into_iter().flatten() {
+            let count = s.encode_utf16().count() as u32 + 1;
+            buf.extend_from_slice(&count.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes());
+            buf.extend_from_slice(&count.to_le_bytes());
+            for c in s.encode_utf16() {
+                buf.extend_from_slice(&c.to_le_bytes());
+            }
+            buf.extend_from_slice(&[0x00, 0x00]);
+            while !buf.len().is_multiple_of(4) {
+                buf.push(0);
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn test_net_server_get_info_request_uses_opnum_21() {
+        let req = build_srvsvc_net_server_get_info_req("dc01.corp.local", 101);
+        assert_eq!(req[0], 5); // RPC version
+        assert_eq!(req[2], 0); // Request PDU
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 21);
+        // ServerName referent then Level, deferred string after the fixed part.
+        assert_eq!(
+            u32::from_le_bytes([req[24], req[25], req[26], req[27]]),
+            0x0002_0000
+        );
+        assert_eq!(
+            u32::from_le_bytes([req[28], req[29], req[30], req[31]]),
+            101
+        );
+        assert_eq!(u16::from_le_bytes([req[8], req[9]]) as usize, req.len());
+    }
+
+    #[test]
+    fn test_net_server_get_info_request_empty_server_is_null_referent() {
+        let req = build_srvsvc_net_server_get_info_req("", 101);
+        assert_eq!(u32::from_le_bytes([req[24], req[25], req[26], req[27]]), 0);
+        assert_eq!(
+            u32::from_le_bytes([req[28], req[29], req[30], req[31]]),
+            101
+        );
+        assert_eq!(req.len(), 24 + 8); // header + null referent + level only
+    }
+
+    #[test]
+    fn test_parse_server_info_101_impacket_layout() {
+        let resp =
+            build_server_info_response(10, 20348, Some("KINGSLANDING"), Some("DC"), false, 0);
+        let info = parse_srvsvc_server_info(&resp).expect("should parse");
+        assert_eq!(info.build(), 20348);
+        assert_eq!(info.version_string(), "10.0.20348");
+        assert_eq!(info.release_name(), "Windows Server 2022");
+        assert_eq!(info.name.as_deref(), Some("KINGSLANDING"));
+        assert_eq!(info.comment.as_deref(), Some("DC"));
+    }
+
+    #[test]
+    fn test_parse_server_info_101_with_discriminant_layout() {
+        let resp = build_server_info_response(10, 26100, None, None, true, 0);
+        let info = parse_srvsvc_server_info(&resp).expect("should parse");
+        assert_eq!(info.build(), 26100);
+        assert_eq!(info.release_name(), "Windows Server 2025");
+        assert!(info.name.is_none());
+    }
+
+    #[test]
+    fn test_parse_server_info_rejects_nonzero_return_code() {
+        let resp = build_server_info_response(10, 20348, None, None, false, 0x0000_0005);
+        assert!(parse_srvsvc_server_info(&resp).is_none());
+    }
+
+    #[test]
+    fn test_parse_server_info_rejects_garbage() {
+        // All-zero payload: return code 0 but version fields are not plausible.
+        assert!(parse_srvsvc_server_info(&vec![0u8; 64]).is_none());
+        // Too short to contain a fixed part.
+        assert!(parse_srvsvc_server_info(&[0u8; 20]).is_none());
+        assert!(parse_srvsvc_server_info(&[]).is_none());
+        // Implausible build (out of range) must not be reported as a version.
+        let resp = build_server_info_response(10, 3, None, None, false, 0);
+        assert!(parse_srvsvc_server_info(&resp).is_none());
+    }
+
+    #[test]
+    fn test_windows_server_release_boundaries() {
+        assert_eq!(windows_server_release(26100), "Windows Server 2025");
+        assert_eq!(windows_server_release(20348), "Windows Server 2022");
+        assert_eq!(windows_server_release(17763), "Windows Server 2019");
+        assert_eq!(windows_server_release(14393), "Windows Server 2016");
+        assert_eq!(windows_server_release(9600), "Windows Server 2012 R2");
+        assert_eq!(windows_server_release(7600), "Windows Server 2008 R2");
+        assert!(windows_server_release(6001).contains("pre-2008"));
+    }
+
+    #[test]
+    fn test_parse_tolerates_missing_deferred_strings() {
+        // name_ref/comment_ref set but no pointees present -- build must still be
+        // reported while the strings come back as None.
+        let mut resp = build_server_info_response(10, 20348, Some("X"), None, false, 0);
+        resp.truncate(24 + 28); // keep the fixed part, drop the deferred string
+        let info = parse_srvsvc_server_info(&resp).expect("build still parseable");
+        assert_eq!(info.build(), 20348);
+        assert!(info.name.is_none());
+    }
+
+    // -- ncacn_ip_tcp PDU framing --
+
+    /// Real `bind_ack` captured from a Windows Server DC's Endpoint Mapper on
+    /// port 135 in response to `build_rpc_bind(&EPMAPPER_UUID, 3, 0)`.
+    const EPM_BIND_ACK: [u8; 60] = [
+        0x05, 0x00, 0x0c, 0x03, 0x10, 0x00, 0x00, 0x00, 0x3c, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x10, 0x00, 0x10, 0xc4, 0x29, 0x00, 0x00, 0x04, 0x00, 0x31, 0x33, 0x35, 0x00,
+        0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x04, 0x5d, 0x88, 0x8a, 0xeb,
+        0x1c, 0xc9, 0x11, 0x9f, 0xe8, 0x08, 0x00, 0x2b, 0x10, 0x48, 0x60, 0x02, 0x00, 0x00, 0x00,
+    ];
+
+    #[test]
+    fn test_is_bind_accepted_real_epm_bind_ack() {
+        assert!(is_bind_accepted(&EPM_BIND_ACK));
+    }
+
+    #[test]
+    fn test_pdu_length_from_header_reads_frag_length() {
+        let header: [u8; 16] = EPM_BIND_ACK[..16].try_into().unwrap();
+        assert_eq!(pdu_length_from_header(&header).unwrap(), 60);
+    }
+
+    #[test]
+    fn test_pdu_length_rejects_pipe_length_prefix() {
+        // The first four bytes of a named-pipe "BTF" frame are a little-endian
+        // length (0x3c = 60), not a PDU header. Reading such a stream as TCP
+        // must be detected rather than mis-parsed silently.
+        let prefixed = {
+            let mut v = vec![0x3c, 0x00, 0x00, 0x00];
+            v.extend_from_slice(&EPM_BIND_ACK);
+            v
+        };
+        let header: [u8; 16] = prefixed[..16].try_into().unwrap();
+        assert!(pdu_length_from_header(&header).is_err());
+    }
+
+    #[test]
+    fn test_pdu_length_rejects_bad_frag_length() {
+        let mut header = [0u8; 16];
+        header[0] = 5;
+        header[8] = 0x08; // frag_length = 8, below the 16-byte minimum
+        assert!(pdu_length_from_header(&header).is_err());
     }
 }

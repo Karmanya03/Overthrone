@@ -11,9 +11,9 @@
 
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::epm::{
-    btf_read_frame, btf_write_frame, build_auth3_pdu, build_rpc_bind, build_rpc_bind_auth,
-    build_rpc_request, build_rpc_request_auth, extract_auth_body, ndr_conformant_string,
-    resolve_uuid_via_epm_tcp,
+    build_auth3_pdu, build_rpc_bind, build_rpc_bind_auth, build_rpc_request,
+    build_rpc_request_auth, extract_auth_body, ndr_conformant_string, resolve_uuid_via_epm_tcp,
+    tcp_read_pdu, tcp_write_pdu,
 };
 use overthrone_core::proto::smb::SmbSession;
 use overthrone_core::proto::smb2::{
@@ -235,9 +235,9 @@ pub async fn request_cert_via_tcp_rpc(
         })?;
 
     let bind_req = build_rpc_bind(&ICERTREQUEST_D_UUID, 0, 0);
-    btf_write_frame(&mut stream, &bind_req).await?;
+    tcp_write_pdu(&mut stream, &bind_req).await?;
 
-    let bind_resp = btf_read_frame(&mut stream).await?;
+    let bind_resp = tcp_read_pdu(&mut stream).await?;
     if !overthrone_core::proto::epm::is_bind_accepted(&bind_resp) {
         return Err(OverthroneError::Rpc {
             target: addr,
@@ -273,8 +273,8 @@ pub async fn request_cert_via_tcp_rpc(
     stub.extend_from_slice(&0u32.to_le_bytes());
 
     let req = build_rpc_request(OPNUM_REQUEST_CERTIFICATE, &stub);
-    btf_write_frame(&mut stream, &req).await?;
-    let resp = btf_read_frame(&mut stream).await?;
+    tcp_write_pdu(&mut stream, &req).await?;
+    let resp = tcp_read_pdu(&mut stream).await?;
 
     parse_icertrequest_response(&resp, ca_name)
 }
@@ -332,9 +332,9 @@ pub async fn request_cert_via_tcp_rpc_auth(
         Some(&ntlmssp_type1),
         2, // RPC_C_AUTHN_LEVEL_CONNECT
     );
-    btf_write_frame(&mut stream, &bind_req).await?;
+    tcp_write_pdu(&mut stream, &bind_req).await?;
 
-    let bind_resp = btf_read_frame(&mut stream).await?;
+    let bind_resp = tcp_read_pdu(&mut stream).await?;
     if !overthrone_core::proto::epm::is_bind_accepted(&bind_resp) {
         return Err(OverthroneError::Rpc {
             target: addr,
@@ -355,7 +355,7 @@ pub async fn request_cert_via_tcp_rpc_auth(
 
     // -- Step 4: Send AUTH3 PDU with Type 3 --
     let auth3 = build_auth3_pdu(&type3, 2);
-    btf_write_frame(&mut stream, &auth3).await?;
+    tcp_write_pdu(&mut stream, &auth3).await?;
 
     // No response expected for AUTH3 (RFC accepted silently).
 
@@ -392,8 +392,8 @@ pub async fn request_cert_via_tcp_rpc_auth(
         None, // CONNECT level auth -- no verifier needed on request PDU
         0,
     );
-    btf_write_frame(&mut stream, &req).await?;
-    let resp = btf_read_frame(&mut stream).await?;
+    tcp_write_pdu(&mut stream, &req).await?;
+    let resp = tcp_read_pdu(&mut stream).await?;
 
     parse_icertrequest_response(&resp, ca_name)
 }

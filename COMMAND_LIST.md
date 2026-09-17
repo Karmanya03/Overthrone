@@ -1,4 +1,4 @@
-# Overthrone v0.4.6 — Complete Command Reference
+# Overthrone v0.4.7 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2019 DCs) — `sevenkingdoms.local` (192.168.57.10)
@@ -16,6 +16,8 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 
 ### 🔍 Phase 1: Recon & Enumeration
 - [Core Enumeration (`ovt enum`)](#core-enumeration-ovt-enum)
+- [LDAP Client (`ovt ldap`)](#ldap-client-ovt-ldap)
+- [RPC Client (`ovt rpc`)](#rpc-client-ovt-rpc)
 - [Scan (`ovt scan`)](#scan-ovt-scan)
 - [Reaper Assessment (`ovt reaper`)](#reaper-assessment-ovt-reaper)
 - [PowerView (`ovt powerview`)](#powerview-ovt-powerview)
@@ -37,6 +39,7 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 ### 🚀 Phase 3: Lateral Movement
 - [Remote Execution (`ovt exec`)](#remote-execution-ovt-exec)
 - [Interactive Remote Shell (`ovt shell`)](#interactive-remote-shell-ovt-shell)
+- [NXC Host Checker (`ovt nxc`)](#nxc-host-checker-ovt-nxc)
 - [SMB Operations (`ovt smb`)](#smb-operations-ovt-smb)
 - [Move Lateral Movement (`ovt move`)](#move-lateral-movement-ovt-move)
 - [MSSQL Operations (`ovt mssql`)](#mssql-operations-ovt-mssql)
@@ -194,6 +197,107 @@ ovt enum audit -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 | `policy` | Password and domain policy |
 | `audit` | Full enumeration coverage checklist in one command |
 | `all` | Everything above |
+
+---
+
+## LDAP Client (`ovt ldap`)
+
+Alias: `ovt ldapsearch`.
+
+Raw LDAP operations similar to `ldapsearch`. Works against any AD/LDAP server including WS2022/2025 with anonymous bind disabled.
+
+```bash
+# Query RootDSE (no creds needed)
+ovt ldap rootdse -t 192.168.57.10
+
+# Raw LDAP search with filter
+ovt ldap search -t 192.168.57.10 -f "(objectClass=user)" -b "DC=sevenkingdoms,DC=local" \
+  -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate users (ldapsearch-style)
+ovt ldap enum-users -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate computers
+ovt ldap enum-computers -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate groups
+ovt ldap enum-groups -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate trusts
+ovt ldap enum-trusts -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# LDAP WhoAmI (connection state)
+ovt ldap whoami -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Use LDAPS (port 636)
+ovt ldap rootdse -t 192.168.57.10 --ldaps
+```
+
+| Subcommand | Flags | What it does |
+|---|---|---|
+| `rootdse` | `-t`/`--target` (required), `--ldaps` | Query RootDSE without credentials |
+| `search` | `-t` (required), `-b` (base DN), `-f` (filter), `-a` (attrs), `--verbose`, `--ldaps` | Raw LDAP search |
+| `whoami` | `-t` (required), `--ldaps` | Report LDAP binding state |
+| `enum-users` | `-t` (required), `--ldaps` | Enumerate domain users |
+| `enum-computers` | `-t` (required), `--ldaps` | Enumerate domain computers |
+| `enum-groups` | `-t` (required), `--ldaps` | Enumerate domain groups |
+| `enum-trusts` | `-t` (required), `--ldaps` | Enumerate domain trusts |
+
+---
+
+## RPC Client (`ovt rpc`)
+
+Alias: `ovt rpcclient`.
+
+rpcclient-style MS-RPC operations over `\IPC$` named pipes. All operations honour domain rules (SAMR requires authenticated sessions on WS2022/2025).
+
+```bash
+# Server info (SRVSVC NetrServerGetInfo)
+ovt rpc srvinfo -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate shares (SRVSVC NetrShareEnumAll)
+ovt rpc netshareenum -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate domain users with RIDs (SAMR)
+ovt rpc enumdomusers -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Enumerate domain groups with RIDs (SAMR)
+ovt rpc enumdomgroups -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Resolve account names to RIDs (SAMR LookupNames)
+ovt rpc lookupnames -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant \
+  --names Administrator,krbtgt,vagrant
+
+# Resolve RIDs to account names (SAMR LookupIds)
+ovt rpc lookuprids -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant \
+  --rids 500,501,502,1000,1101,1102
+
+# LSA domain info (domain name, SID, DNS info)
+ovt rpc lsaenumsid -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Create a domain user (SAMR -- advisory: suggests net user via ovt exec)
+ovt rpc createdomuser -t 192.168.57.10 --username testuser --password 'Pass123!' \
+  -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Delete a domain user by RID (SAMR)
+ovt rpc deletedomuser -t 192.168.57.10 --rid 0x400 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Null session enumeration
+ovt rpc srvinfo -t 192.168.57.10 --null-session
+ovt rpc netshareenum -t 192.168.57.10 --null-session
+```
+
+| Subcommand | Flags | What it does |
+|---|---|---|
+| `srvinfo` | `-t` (required), `--null-session` | SRVSVC NetrServerGetInfo -- server name, OS build |
+| `netshareenum` | `-t` (required), `--null-session` | SRVSVC NetrShareEnumAll -- all shares |
+| `enumdomusers` | `-t` (required), `--max`, `--null-session` | SAMR EnumerateUsersInDomain |
+| `enumdomgroups` | `-t` (required), `--max`, `--null-session` | SAMR EnumerateGroupsInDomain |
+| `lookupnames` | `-t` (required), `--names` (comma-sep), `--null-session` | SAMR LookupNames -- name -> RID |
+| `lookuprids` | `-t` (required), `--rids` (comma-sep), `--null-session` | SAMR LookupIds -- RID -> name |
+| `lsaenumsid` | `-t` (required), `--null-session` | LSARPC QueryInfoPolicy -- domain SID |
+| `createdomuser` | `-t` (required), `--username`, `--password` | SAMR CreateDomainUser (advisory) |
+| `deletedomuser` | `-t` (required), `--rid` | SAMR DeleteDomainUser by RID (advisory) |
 
 ---
 
@@ -1148,6 +1252,49 @@ ovt shell --target 192.168.57.10 --shell-type wmi
 |---|---|---|
 | `--target`, `-t` | required | Target host |
 | `--shell-type`, `-T` | `winrm` | `winrm`, `smb`, `wmi` |
+
+---
+
+## NXC Host Checker (`ovt nxc`)
+
+Aliases: `ovt netexec`, `ovt cme`.
+
+NetExec/CrackMapExec-style multi-protocol host checker. Supports SMB, LDAP, WinRM, and RPC checks with concurrent host scanning.
+
+```bash
+# Check SMB on a single host
+ovt nxc smb 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Check all protocols on a host
+ovt nxc all 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Sweep a /24 with SMB checks
+ovt nxc smb 192.168.57.0/24 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# LDAP-only check (RootDSE probe)
+ovt nxc ldap 192.168.57.10
+
+# WinRM check
+ovt nxc winrm 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+
+# RPC endpoint mapper check
+ovt nxc rpc 192.168.57.10
+
+# Multiple targets
+ovt nxc smb 192.168.57.10,192.168.57.198,192.168.57.200 \
+  -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Only show positive results
+ovt nxc smb 192.168.57.0/24 -d sevenkingdoms.local -u vagrant -p vagrant --only-positive
+```
+
+SMB output includes: dialect, signing requirement, SMBv1 acceptance, host name, domain, functional level, and `(Pwn3d!)` admin marker.
+
+| Flag | Default | What it does |
+|---|---|---|
+| `protocol` | required | `smb`, `ldap`, `winrm`, `rpc`, or `all` |
+| `targets` | required | Host(s), CIDR, comma/space separated |
+| `--only-positive` | `false` | Only print hosts with results |
 
 ---
 

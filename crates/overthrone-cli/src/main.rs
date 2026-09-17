@@ -660,6 +660,34 @@ enum Commands {
         ad_only: bool,
     },
 
+    /// rpcclient-style MS-RPC operations (srvinfo/netshareenum/enumdomusers/enumdomgroups/lookupnames/lookuprids/lsaenumsid/createdomuser/deletedomuser)
+    #[command(alias = "rpcclient")]
+    Rpc {
+        #[command(subcommand)]
+        action: commands::rpc::RpcAction,
+    },
+
+    /// ldapsearch-style LDAP operations (rootdse/search/whoami/enum-users/enum-computers/enum-groups/enum-trusts)
+    #[command(alias = "ldapsearch")]
+    Ldap {
+        #[command(subcommand)]
+        action: commands::ldap::LdapAction,
+    },
+
+    /// NetExec-style multi-protocol host checker (smb/ldap/winrm/rpc)
+    #[command(alias = "netexec", alias = "cme")]
+    Nxc {
+        /// Protocol to check (`all` runs every protocol against each target)
+        #[arg(value_enum)]
+        protocol: commands::nxc::NxcProtocol,
+        /// Target host(s), CIDR range(s), comma/space separated
+        #[arg(required = true, value_delimiter = ',')]
+        targets: Vec<String>,
+        /// Only print hosts that produced a result
+        #[arg(long)]
+        only_positive: bool,
+    },
+
     /// MSSQL operations -- query execution, linked servers, xp_cmdshell, audit
     #[command(alias = "sql")]
     Mssql {
@@ -3393,6 +3421,13 @@ async fn async_main() -> i32 {
             )
             .await
         }
+        Commands::Rpc { ref action } => commands::rpc::cmd_rpc(&cli, action.clone()).await,
+        Commands::Ldap { ref action } => commands::ldap::cmd_ldap(&cli, action.clone()).await,
+        Commands::Nxc {
+            protocol,
+            ref targets,
+            only_positive,
+        } => commands::nxc::cmd_nxc(&cli, protocol, targets.clone(), only_positive).await,
         Commands::Mssql {
             ref action,
             ref proxy,
@@ -3807,7 +3842,9 @@ fn require_creds_list(cli: &Cli) -> std::result::Result<Vec<Credentials>, i32> {
     })
 }
 
-fn resolve_credentials_from_cli(cli: &Cli) -> std::result::Result<Vec<Credentials>, String> {
+pub(crate) fn resolve_credentials_from_cli(
+    cli: &Cli,
+) -> std::result::Result<Vec<Credentials>, String> {
     let domain = cli.domain.as_deref().unwrap_or("");
     auth::resolve_credentials(
         domain,
@@ -9947,9 +9984,29 @@ mod cli_parse_tests {
     use std::collections::HashMap;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    /// Parse arguments on a thread with a larger stack.
+    ///
+    /// clap's derive expansion for the ~50-variant `Commands` enum is deeply
+    /// recursive, and the 2 MiB stack the test harness gives spawned threads on
+    /// Windows is not enough for it -- the parse overflows before any assertion
+    /// runs. The real binary parses on the main thread, which has a larger stack.
+    fn parse_cli(args: &[&str]) -> Cli {
+        let owned: Vec<String> = args.iter().map(|s| (*s).to_string()).collect();
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(move || {
+                let refs: Vec<&str> = owned.iter().map(String::as_str).collect();
+                Cli::try_parse_from(refs)
+            })
+            .expect("spawn parser thread")
+            .join()
+            .expect("parser thread panicked")
+            .unwrap_or_else(|e| panic!("clap parse failed: {e}"))
+    }
+
     #[test]
     fn report_output_flag_keeps_string_type_and_public_name() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "ovt",
             "report",
             "--input",
@@ -9958,8 +10015,7 @@ mod cli_parse_tests {
             "owner-report.md",
             "--format",
             "markdown",
-        ])
-        .expect("report command should parse --output without clap type mismatch");
+        ]);
 
         match *cli.command {
             Commands::Report {
@@ -9976,7 +10032,7 @@ mod cli_parse_tests {
 
     #[test]
     fn kerberos_user_enum_output_flag_keeps_optional_type_and_public_name() {
-        let cli = Cli::try_parse_from([
+        let cli = parse_cli(&[
             "ovt",
             "kerberos",
             "user-enum",
@@ -9990,8 +10046,7 @@ mod cli_parse_tests {
             "valid-users.txt",
             "--delay",
             "10",
-        ])
-        .expect("kerberos user-enum should parse -o/--output without clap type mismatch");
+        ]);
 
         match *cli.command {
             Commands::Kerberos {
