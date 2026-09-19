@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::prelude::*;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs};
@@ -753,6 +753,23 @@ impl WizardApp {
             *v = value;
         }
     }
+
+    pub fn reset_current_field(&mut self) {
+        if let Some(idx) = self.menu_state.selected()
+            && let Some((_, v)) = self.input_fields.get_mut(idx)
+        {
+            v.clear();
+            self.input_cursor = 0;
+        }
+    }
+
+    pub fn reset_all_fields(&mut self) {
+        for (_, v) in &mut self.input_fields {
+            v.clear();
+        }
+        self.active_input = None;
+        self.input_cursor = 0;
+    }
 }
 
 // ===========================================================
@@ -765,7 +782,7 @@ pub fn handle_event(app: &mut WizardApp) -> std::io::Result<bool> {
     }
 
     match event::read()? {
-        Event::Key(key) => {
+        Event::Key(key) if key.kind == KeyEventKind::Press => {
             // Global quit
             if key.code == KeyCode::Char('q') && app.active_input.is_none() {
                 app.should_quit = true;
@@ -1220,6 +1237,14 @@ fn handle_target_config(app: &mut WizardApp, key: KeyEvent) {
         KeyCode::Char('r') | KeyCode::Char('R') if app.selected_count() > 0 => {
             app.screen = WizardScreen::Running;
             app.running = true;
+        }
+        KeyCode::Char('x') => {
+            app.reset_current_field();
+            app.status_message = "Current field cleared".to_string();
+        }
+        KeyCode::Char('X') => {
+            app.reset_all_fields();
+            app.status_message = "All fields cleared".to_string();
         }
         _ => {}
     }
@@ -1679,6 +1704,14 @@ fn draw_target_config(frame: &mut Frame, area: Rect, app: &WizardApp) {
         Line::from(vec![
             Span::styled("  Esc", Style::default().fg(Color::Yellow)),
             Span::raw("  Stop editing field"),
+        ]),
+        Line::from(vec![
+            Span::styled("  x", Style::default().fg(Color::Yellow)),
+            Span::raw("  Clear current field"),
+        ]),
+        Line::from(vec![
+            Span::styled("  X", Style::default().fg(Color::Yellow)),
+            Span::raw("  Clear ALL fields"),
         ]),
         Line::from(vec![
             Span::styled("  Tab", Style::default().fg(Color::Yellow)),

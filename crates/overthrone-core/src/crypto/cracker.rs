@@ -180,6 +180,62 @@ fn is_zstd_compressed(bytes: &[u8]) -> bool {
     bytes.len() >= ZSTD_MAGIC.len() && bytes[..ZSTD_MAGIC.len()] == ZSTD_MAGIC
 }
 
+/// Common paths where rockyou.txt (or similar wordlists) may exist on Linux systems.
+const ROCKYOU_SEARCH_PATHS: &[&str] = &[
+    "/usr/share/wordlists/rockyou.txt",
+    "/usr/share/wordlists/rockyou.txt.gz",
+    "/usr/share/rockyou.txt",
+    "/usr/share/rockyou.txt.gz",
+    "/usr/share/seclists/Passwords/Leaked-Databases/rockyou.txt",
+    "/usr/share/seclists/rockyou.txt",
+    "/opt/wordlists/rockyou.txt",
+    "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
+    "/usr/share/dict/words",
+];
+
+/// Ensure a usable wordlist exists on disk, returning its path.
+///
+/// Search order:
+/// 1. If `custom_path` is `Some` and the file exists, return it directly.
+/// 2. Check common system paths (`/usr/share/wordlists/rockyou.txt`, etc.).
+/// 3. Write the embedded top-10K wordlist to a temp file and return that.
+pub fn ensure_wordlist(custom_path: Option<&str>) -> Result<std::path::PathBuf> {
+    use std::path::Path;
+
+    // 1. Explicit custom path
+    if let Some(p) = custom_path {
+        if Path::new(p).is_file() {
+            info!("Using custom wordlist: {}", p);
+            return Ok(std::path::PathBuf::from(p));
+        }
+        warn!("Custom wordlist '{}' not found, searching defaults...", p);
+    }
+
+    // 2. Check common system paths
+    for path in ROCKYOU_SEARCH_PATHS {
+        if Path::new(path).is_file() {
+            info!("Found wordlist at {}", path);
+            return Ok(std::path::PathBuf::from(path));
+        }
+    }
+
+    // 3. Fall back to embedded wordlist -- write to temp file
+    let fallback = std::env::temp_dir().join("overthrone_embedded_wordlist.txt");
+    if fallback.is_file() {
+        info!("Using cached embedded wordlist at {}", fallback.display());
+        return Ok(fallback);
+    }
+
+    info!("No system wordlist found; writing embedded top-10K wordlist to temp file");
+    let wordlist = get_embedded_wordlist();
+    let content = wordlist.join("\n");
+    std::fs::write(&fallback, &content).map_err(|e| {
+        OverthroneError::custom(format!("Cannot write embedded wordlist to temp: {}", e))
+    })?;
+
+    Ok(fallback)
+}
+
 // ===========================================================
 // Rule Engine -- Password Variations
 // ===========================================================
@@ -1757,17 +1813,14 @@ fn try_hashcat(hash: &HashType) -> Option<String> {
         .output()
         .ok()?;
 
-    let _ = std::fs::remove_file(&hash_file);
-    let _ = std::fs::remove_file(&wordlist_file);
-
-    if output.status.success() {
+    let result = if output.status.success() {
         let show_output = Command::new("hashcat")
             .args(["-m", &mode.to_string(), "--show", hash_file.to_str()?])
             .output()
             .ok()?;
 
-        let result = String::from_utf8_lossy(&show_output.stdout);
-        result
+        let stdout = String::from_utf8_lossy(&show_output.stdout);
+        stdout
             .lines()
             .next()?
             .split(':')
@@ -1775,7 +1828,12 @@ fn try_hashcat(hash: &HashType) -> Option<String> {
             .map(|s| s.to_string())
     } else {
         None
-    }
+    };
+
+    let _ = std::fs::remove_file(&hash_file);
+    let _ = std::fs::remove_file(&wordlist_file);
+
+    result
 }
 
 /// Create a `CrackerConfig` pre-populated with SmartWordlist candidates.

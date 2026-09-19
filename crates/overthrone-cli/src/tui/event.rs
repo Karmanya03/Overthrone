@@ -1,5 +1,5 @@
 use crate::tui::app::{App, Tab};
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::time::Duration;
 
 pub struct EventLoop;
@@ -12,7 +12,7 @@ impl EventLoop {
         }
 
         match event::read()? {
-            Event::Key(key) => Self::handle_key(app, key),
+            Event::Key(key) if key.kind == KeyEventKind::Press => Self::handle_key(app, key),
             Event::Mouse(mouse) => Self::handle_mouse(app, mouse),
             Event::Resize(_, _) => {} // ratatui handles this
             _ => {}

@@ -75,6 +75,7 @@ pub fn build_from_reaper(
         spn_map: std::collections::HashMap::new(),
         gpos: Vec::new(),
         acl_entries: Vec::new(),
+        sid_to_name: std::collections::HashMap::new(),
     };
 
     let mut graph = AttackGraph::new();

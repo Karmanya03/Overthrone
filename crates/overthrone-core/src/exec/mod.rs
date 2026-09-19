@@ -227,24 +227,27 @@ fn base64_encode_ps(script: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(&utf16)
 }
 
-/// Try all available execution methods in order of stealth
-/// Order: C2 (if session exists) -> WinRM -> AtExec -> SmbExec -> PSExec -> WMI
+/// Try all available execution methods in order of reliability
+/// Order: SmbExec -> PsExec -> WMI -> AtExec -> WinRM
+/// WinRM is last because it only works when WinRM is enabled (DCs block it by default),
+/// but it's a critical fallback when SMB-based methods fail (e.g. SMB2 signing issues on WS2025).
 /// If `c2_sessions` is provided, C2 sessions matching the target hostname
 /// are tried first (most OPSEC-safe since traffic goes through existing implant).
 pub async fn auto_exec(target: &str, command: &str, creds: &ExecCredentials) -> Result<ExecOutput> {
     use tracing::info;
 
-    // Order: WinRM -> AtExec -> SmbExec -> PsExec -> WMI (most reliable first)
+    // Order: SmbExec -> PsExec -> WMI -> AtExec -> WinRM (SMB-first, WinRM as last fallback)
     #[allow(unused_mut)]
     let mut executors: Vec<Box<dyn RemoteExecutor>> = vec![
-        Box::new(winrm::WinRmExecutor::new(creds.clone())),
-        Box::new(atexec::AtExecutor::new(creds.clone())),
         Box::new(smbexec::SmbExecutor::new(creds.clone())),
         Box::new(psexec::PsExecutor::new(creds.clone())),
+        Box::new(atexec::AtExecutor::new(creds.clone())),
     ];
     // WmiExec only works on Windows -- skip on other platforms
     #[cfg(windows)]
     executors.push(Box::new(wmiexec::WmiExecutor::new(creds.clone())));
+    // WinRM last: HTTP-based, doesn't depend on SMB, but requires WinRM to be enabled
+    executors.push(Box::new(winrm::WinRmExecutor::new(creds.clone())));
 
     for executor in &executors {
         if executor.check_available(target).await {

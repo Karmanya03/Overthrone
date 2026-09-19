@@ -296,6 +296,193 @@ impl AclFinding {
     }
 }
 
+// --- Bridge from core AceEntry to reaper AclFinding ---------------------------
+
+/// Convert a core `AceEntry` (binary-parsed) into a reaper `AclFinding`.
+/// Returns `None` for ACE types we don't track (deny ACEs, etc.).
+fn ace_to_acl_finding(
+    ace: &overthrone_core::proto::ldap::AceEntry,
+    target: &str,
+    target_dn: &str,
+) -> Option<AclFinding> {
+    use overthrone_core::proto::ldap::AceType;
+
+    // Only process ALLOW ACEs
+    match ace.ace_type {
+        AceType::AccessAllowed | AceType::AccessAllowedObject => {}
+        _ => return None,
+    }
+
+    let mask = ace.access_mask;
+    let principal = format!("SID:{}", ace.trustee_sid);
+    let principal_sid = Some(ace.trustee_sid.clone());
+
+    // Check for object-specific ACEs (WriteProperty on specific GUIDs)
+    if ace.ace_type == AceType::AccessAllowedObject
+        && let Some(ref obj_type) = ace.object_type
+    {
+        let obj_lower = obj_type.to_lowercase();
+
+        // Check known attribute GUIDs
+        if let Some((attr_name, edge_label, _severity, _traversable, _abuse)) =
+            attribute_guid_info(&obj_lower)
+        {
+            // For WriteProperty with specific GUID, check mask
+            if mask & ADS_RIGHT_DS_WRITE_PROP != 0 {
+                let right = match edge_label {
+                    "WriteSPN" => DangerousRight::WriteProperty {
+                        attribute: "servicePrincipalName".to_string(),
+                        guid: obj_lower.clone(),
+                    },
+                    "AddKeyCredentialLink" => DangerousRight::WriteProperty {
+                        attribute: "msDS-KeyCredentialLink".to_string(),
+                        guid: obj_lower.clone(),
+                    },
+                    "AddAllowedToAct" => DangerousRight::AddAllowedToAct,
+                    "ForceChangePassword" => DangerousRight::ForceChangePassword,
+                    "AddMembers" => DangerousRight::AddMembers,
+                    _ => DangerousRight::WriteProperty {
+                        attribute: attr_name.to_string(),
+                        guid: obj_lower.clone(),
+                    },
+                };
+                return Some(AclFinding::new(
+                    &principal,
+                    principal_sid,
+                    target,
+                    target_dn,
+                    right,
+                    false,
+                ));
+            }
+        }
+
+        // ForceChangePassword
+        if obj_lower == GUID_USER_FORCE_CHANGE_PASSWORD.to_lowercase()
+            && mask & ADS_RIGHT_DS_CONTROL_ACCESS != 0
+        {
+            return Some(AclFinding::new(
+                &principal,
+                principal_sid,
+                target,
+                target_dn,
+                DangerousRight::ForceChangePassword,
+                false,
+            ));
+        }
+
+        // Replicating Directory Changes (DCSync)
+        if (obj_lower == GUID_REPLICATING_DIRECTORY_CHANGES.to_lowercase()
+            || obj_lower == GUID_REPLICATING_DIRECTORY_CHANGES_ALL.to_lowercase())
+            && mask & ADS_RIGHT_DS_CONTROL_ACCESS != 0
+        {
+            return Some(AclFinding::new(
+                &principal,
+                principal_sid,
+                target,
+                target_dn,
+                DangerousRight::AllExtendedRights,
+                false,
+            ));
+        }
+
+        // Self-membership (AddSelf)
+        if obj_lower == GUID_SELF_MEMBERSHIP.to_lowercase() && mask & ADS_RIGHT_DS_SELF != 0 {
+            return Some(AclFinding::new(
+                &principal,
+                principal_sid,
+                target,
+                target_dn,
+                DangerousRight::AddSelf,
+                false,
+            ));
+        }
+
+        // Generic object-specific WriteProperty fallthrough
+        if mask & ADS_RIGHT_DS_WRITE_PROP != 0 {
+            return Some(AclFinding::new(
+                &principal,
+                principal_sid,
+                target,
+                target_dn,
+                DangerousRight::WriteProperty {
+                    attribute: "unknown".to_string(),
+                    guid: obj_lower,
+                },
+                false,
+            ));
+        }
+
+        return None;
+    }
+
+    // Generic access mask checks (non-object-specific ACEs)
+    if mask & GENERIC_ALL == GENERIC_ALL || mask == 0x000F01FF {
+        return Some(AclFinding::new(
+            &principal,
+            principal_sid,
+            target,
+            target_dn,
+            DangerousRight::GenericAll,
+            false,
+        ));
+    }
+    if mask & GENERIC_WRITE != 0 {
+        return Some(AclFinding::new(
+            &principal,
+            principal_sid,
+            target,
+            target_dn,
+            DangerousRight::GenericWrite,
+            false,
+        ));
+    }
+    if mask & WRITE_DACL != 0 {
+        return Some(AclFinding::new(
+            &principal,
+            principal_sid,
+            target,
+            target_dn,
+            DangerousRight::WriteDacl,
+            false,
+        ));
+    }
+    if mask & WRITE_OWNER != 0 {
+        return Some(AclFinding::new(
+            &principal,
+            principal_sid,
+            target,
+            target_dn,
+            DangerousRight::WriteOwner,
+            false,
+        ));
+    }
+    // CreateChild
+    if mask & ADS_RIGHT_DS_CREATE_CHILD != 0 && ace.object_type.is_some() {
+        return Some(AclFinding::new(
+            &principal,
+            principal_sid,
+            target,
+            target_dn,
+            DangerousRight::CreateChild,
+            false,
+        ));
+    }
+    // AllExtendedRights (control access with no specific GUID)
+    if mask & ADS_RIGHT_DS_CONTROL_ACCESS != 0 && ace.object_type.is_none() {
+        return Some(AclFinding::new(
+            &principal,
+            principal_sid,
+            target,
+            target_dn,
+            DangerousRight::AllExtendedRights,
+            false,
+        ));
+    }
+
+    None
+}
+
 // --- ACE bitmask constants ----------------------------------------------------
 
 const GENERIC_ALL: u32 = 0x1000_0000;
@@ -311,6 +498,7 @@ const ADS_RIGHT_DS_WRITE_PROP: u32 = 0x0000_0020;
 /// ADS_RIGHT_DS_CONTROL_ACCESS -- extended rights
 const ADS_RIGHT_DS_CONTROL_ACCESS: u32 = 0x0000_0100;
 /// READ_CONTROL
+#[allow(dead_code)]
 const READ_CONTROL: u32 = 0x0002_0000;
 
 // --- Well-known extended-right GUIDs -----------------------------------------
@@ -318,21 +506,28 @@ const READ_CONTROL: u32 = 0x0002_0000;
 const GUID_USER_FORCE_CHANGE_PASSWORD: &str = "00299570-246d-11d0-a768-00aa006e0529";
 const GUID_REPLICATING_DIRECTORY_CHANGES: &str = "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2";
 const GUID_REPLICATING_DIRECTORY_CHANGES_ALL: &str = "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2";
+#[allow(dead_code)]
 const GUID_REPLICATING_DIRECTORY_CHANGES_IN_FILTERED_SET: &str =
     "89e95b76-444d-4c62-991a-0facbeda640c";
 /// Member attribute (bf9679c0) -- AddMembers via WriteProperty
+#[allow(dead_code)]
 const GUID_MEMBER: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
 /// Legacy LAPS -- ms-Mcs-AdmPwd read extended right
+#[allow(dead_code)]
 const GUID_MS_MCS_ADMPWD: &str = "faa13209-962c-4e55-8cfe-1b99ae3f1169";
 /// Windows LAPS 2023 -- ms-LAPS-Password read extended right
+#[allow(dead_code)]
 const GUID_MS_LAPS_PASSWORD: &str = "a5b3b0f3-49d3-4c69-8de1-e6d42ec35bfa";
 /// Windows LAPS 2023 -- ms-LAPS-EncryptedPassword expiry
+#[allow(dead_code)]
 const GUID_MS_LAPS_ENC_PASSWORD_EXPIRY: &str = "be2bb7b5-5e42-4f5c-b14f-cf7b2afa5b9d";
 /// Self-membership validated write (add self to group)
 const GUID_SELF_MEMBERSHIP: &str = "bf9679c0-0de6-11d0-a285-00aa003049e2";
 /// Certificate enrolment extended right
+#[allow(dead_code)]
 const GUID_CERTIFICATE_ENROLLMENT: &str = "0e10c968-78fb-11d2-90d4-00c04f79dc55";
 /// Certificate auto-enrolment
+#[allow(dead_code)]
 const GUID_CERTIFICATE_AUTO_ENROLLMENT: &str = "a05b8cc2-17bc-4802-a710-e7c15ab866a2";
 
 // --- Attribute GUID registry --------------------------------------------------
@@ -536,32 +731,22 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
         "(objectClass=pKICertificateTemplate)",
     ];
 
-    let sd_attrs = &[
-        "distinguishedName",
-        "sAMAccountName",
-        "name",
-        "nTSecurityDescriptor",
-        "objectClass",
-    ];
-
     for filter in &hv_filters {
         debug!("[acls] Querying: {}", filter);
-        match conn.custom_search(filter, sd_attrs).await {
-            Ok(entries) => {
-                for entry in &entries {
-                    let target_dn = entry.dn.clone();
-                    let target_name = entry
-                        .attrs
-                        .get("sAMAccountName")
-                        .or_else(|| entry.attrs.get("name"))
-                        .and_then(|v| v.first())
-                        .cloned()
+        match conn.enumerate_acls(filter).await {
+            Ok(dacl_list) => {
+                for dacl in &dacl_list {
+                    // Extract the sAMAccountName or name from the DN
+                    let target_dn = dacl.object_dn.clone();
+                    let target_name = target_dn
+                        .split(',')
+                        .find(|attr| attr.trim().starts_with("CN="))
+                        .map(|cn| cn.trim()[3..].to_string())
                         .unwrap_or_else(|| target_dn.clone());
 
-                    if let Some(sddl_vals) = entry.attrs.get("nTSecurityDescriptor") {
-                        for sddl in sddl_vals {
-                            let mut f = parse_sddl_acl(sddl, &target_name, &target_dn);
-                            findings.append(&mut f);
+                    for ace in &dacl.aces {
+                        if let Some(f) = ace_to_acl_finding(ace, &target_name, &target_dn) {
+                            findings.push(f);
                         }
                     }
                 }
@@ -751,9 +936,10 @@ pub async fn enumerate_dangerous_acls(config: &ReaperConfig) -> Result<Vec<AclFi
     Ok(findings)
 }
 
-// --- SDDL parsing -------------------------------------------------------------
+// --- SDDL parsing (legacy, kept as fallback) ----------------------------------
 
 /// Parse the DACL section of an SDDL string and return all dangerous ACE findings.
+#[allow(dead_code)]
 fn parse_sddl_acl(sddl: &str, target: &str, target_dn: &str) -> Vec<AclFinding> {
     let mut findings = Vec::new();
 
@@ -797,6 +983,7 @@ fn parse_sddl_acl(sddl: &str, target: &str, target_dn: &str) -> Vec<AclFinding> 
 
 /// Parse a single SDDL ACE string.
 /// Format: `ace_type;ace_flags;rights;object_guid;inherit_object_guid;trustee`
+#[allow(dead_code)]
 fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding> {
     let parts: Vec<&str> = ace.splitn(6, ';').collect();
     if parts.len() < 6 {
@@ -1025,6 +1212,7 @@ fn parse_sddl_ace(ace: &str, target: &str, target_dn: &str) -> Option<AclFinding
 
 /// Returns `true` for well-known built-in principals that should not be flagged.
 /// Covers both SDDL two-letter aliases and common well-known SID strings.
+#[allow(dead_code)]
 fn is_builtin_trustee(trustee: &str) -> bool {
     // SDDL short aliases
     match trustee {
@@ -1059,6 +1247,7 @@ fn is_builtin_trustee(trustee: &str) -> bool {
 
 /// Convert SDDL abbreviated rights tokens to a 32-bit access mask.
 /// Reference: <https://learn.microsoft.com/en-us/windows/win32/secauthz/ace-strings>
+#[allow(dead_code)]
 fn sddl_abbrev_to_mask(s: &str) -> u32 {
     let mut mask = 0u32;
     let bytes = s.as_bytes();

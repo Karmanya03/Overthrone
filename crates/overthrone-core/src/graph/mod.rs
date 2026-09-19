@@ -6,7 +6,10 @@
 //!
 //! Uses the `petgraph` crate for the underlying graph data structure.
 use crate::error::{OverthroneError, Result};
-use crate::proto::ldap::{AdComputer, AdGroup, AdTrust, AdUser, DomainEnumeration, TrustDirection};
+use crate::proto::ldap::{
+    AceEntry, AceType, AdComputer, AdGroup, AdTrust, AdUser, DomainEnumeration, TrustDirection,
+    ad_rights,
+};
 use petgraph::Direction;
 use petgraph::algo::dijkstra;
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
@@ -797,11 +800,66 @@ impl AttackGraph {
             );
         }
 
+        // 9. ACL edges (DACL ACEs from high-value objects)
+        self.ingest_acls(data);
+
         info!(
             "Graph: {} nodes, {} edges",
             self.node_count(),
             self.edge_count()
         );
+    }
+
+    /// Ingest ACL (DACL) entries into the graph as edges.
+    ///
+    /// Resolves target objects via DN index and source principals via the
+    /// SID-to-name map built during enumeration.  Only `AccessAllowed` and
+    /// `AccessAllowedObject` ACE types produce edges; `AccessDenied` and
+    /// unknown types are skipped.
+    pub fn ingest_acls(&mut self, data: &DomainEnumeration) {
+        let mut edges_added = 0u32;
+        for dacl in &data.acl_entries {
+            // Resolve target node from DN
+            let target_key = dacl.object_dn.to_uppercase();
+            let target_idx = match self.dn_index.get(&target_key) {
+                Some(&idx) => idx,
+                None => continue, // target not in graph (e.g. not a user/computer/group)
+            };
+
+            for ace in &dacl.aces {
+                // Only positive grants
+                if !matches!(
+                    ace.ace_type,
+                    AceType::AccessAllowed | AceType::AccessAllowedObject
+                ) {
+                    continue;
+                }
+
+                // Resolve source principal from SID
+                let source_name = match data.sid_to_name.get(&ace.trustee_sid) {
+                    Some(name) => name.clone(),
+                    None => continue, // SID not in enumeration (e.g. built-in, well-known)
+                };
+
+                // Look up source node by name@domain
+                let source_idx = match self.find_node(&source_name) {
+                    Some(idx) => idx,
+                    None => continue,
+                };
+
+                let edge_type = classify_ace(ace);
+                self.graph.add_edge(source_idx, target_idx, edge_type);
+                edges_added += 1;
+            }
+        }
+
+        if edges_added > 0 {
+            info!(
+                "ACL ingestion: added {} edges from {} DACL objects",
+                edges_added,
+                data.acl_entries.len()
+            );
+        }
     }
 
     fn ingest_user(&mut self, user: &AdUser, domain: &str) {
@@ -1947,6 +2005,70 @@ fn parse_edge_type(raw: &str) -> EdgeType {
     }
 }
 
+/// Classify an `AceEntry` into the most specific `EdgeType`.
+///
+/// Priority: object-type GUID (object-specific ACEs) > access-mask flags.
+/// Falls back to a generic edge when the mask is ambiguous.
+fn classify_ace(ace: &AceEntry) -> EdgeType {
+    // Object-type GUID takes priority for ACCESS_ALLOWED_OBJECT ACEs
+    if let Some(ref guid) = ace.object_type {
+        let g = guid.to_lowercase();
+        return match g.as_str() {
+            // Well-known control access rights
+            s if s == ad_rights::FORCE_CHANGE_PASSWORD => EdgeType::ForceChangePassword,
+            s if s == ad_rights::REPL_GET_CHANGES => EdgeType::GetChanges,
+            s if s == ad_rights::REPL_GET_CHANGES_ALL => EdgeType::GetChangesAll,
+            // User-Force-Change-Password (alternate casing)
+            "00299570-246d-11d0-a768-00aa006e0529" => EdgeType::ForceChangePassword,
+            // DS-Replication
+            "1131f6aa-9c07-11d1-f79f-00c04fc2dcd2" => EdgeType::GetChanges,
+            "1131f6ad-9c07-11d1-f79f-00c04fc2dcd2" => EdgeType::GetChangesAll,
+            // Attribute-level write rights (userSchemaattributeSet GUIDs)
+            "bf9679c0-0de6-11d0-a285-00aa003049e2" => EdgeType::AddMembers,
+            "bf9679a0-0de6-11d0-a285-00aa003049e2" => EdgeType::WriteSPN,
+            "bf9679b0-0de6-11d0-a285-00aa003049e2" => EdgeType::WriteSPN,
+            // msDS-AllowedToDelegateTo / AllowedToAct
+            "bf9679c3-0de6-11d0-a285-00aa003049e2" => EdgeType::WriteAllowedToDelegateTo,
+            // Other GUIDs fall through to access-mask classification
+            _ => classify_by_mask(ace),
+        };
+    }
+
+    classify_by_mask(ace)
+}
+
+/// Classify an ACE by its access mask bits (no object-type GUID).
+fn classify_by_mask(ace: &AceEntry) -> EdgeType {
+    let m = ace.access_mask;
+
+    // Generic access rights (high nibble)
+    if m & 0x10000000 != 0 || m == 0x000F01FF {
+        return EdgeType::GenericAll;
+    }
+    if m & 0x40000000 != 0 {
+        return EdgeType::GenericWrite;
+    }
+    if m & 0x00080000 != 0 {
+        return EdgeType::WriteOwner;
+    }
+    if m & 0x00040000 != 0 {
+        return EdgeType::WriteDacl;
+    }
+
+    // Extended right (DS-Control-Access)
+    if m & 0x00000100 != 0 {
+        return EdgeType::AllExtendedRights;
+    }
+
+    // WriteProperty on a specific attribute
+    if m & 0x00000020 != 0 {
+        return EdgeType::GenericWrite;
+    }
+
+    // Fallback: return a Custom edge with the mask hex for visibility
+    EdgeType::Custom(format!("mask=0x{:08x}", m))
+}
+
 fn json_scalar_to_string(value: &Value) -> Option<String> {
     match value {
         Value::String(s) => Some(s.clone()),
@@ -1992,6 +2114,7 @@ fn extract_cn(dn: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::ldap::DaclInfo;
 
     /// Helper: build a small AD-like graph for testing.
     /// ```text
@@ -2419,5 +2542,375 @@ mod tests {
         assert!(edges.contains(&EdgeType::WriteDacl));
         assert!(edges.contains(&EdgeType::GenericAll));
         assert!(edges.contains(&EdgeType::ForceChangePassword));
+    }
+
+    fn make_ace(mask: u32, obj_type: Option<&str>) -> AceEntry {
+        AceEntry {
+            ace_type: AceType::AccessAllowed,
+            ace_flags: 0,
+            access_mask: mask,
+            trustee_sid: "S-1-5-21-1000".into(),
+            object_type: obj_type.map(String::from),
+            inherited_object_type: None,
+        }
+    }
+
+    #[test]
+    fn test_classify_ace_generic_all_mask() {
+        assert_eq!(
+            classify_ace(&make_ace(0x10000000, None)),
+            EdgeType::GenericAll
+        );
+    }
+
+    #[test]
+    fn test_classify_ace_full_access_mask() {
+        assert_eq!(
+            classify_ace(&make_ace(0x000F01FF, None)),
+            EdgeType::GenericAll
+        );
+    }
+
+    #[test]
+    fn test_classify_ace_generic_write() {
+        assert_eq!(
+            classify_ace(&make_ace(0x40000000, None)),
+            EdgeType::GenericWrite
+        );
+    }
+
+    #[test]
+    fn test_classify_ace_write_dacl() {
+        assert_eq!(
+            classify_ace(&make_ace(0x00040000, None)),
+            EdgeType::WriteDacl
+        );
+    }
+
+    #[test]
+    fn test_classify_ace_write_owner() {
+        assert_eq!(
+            classify_ace(&make_ace(0x00080000, None)),
+            EdgeType::WriteOwner
+        );
+    }
+
+    #[test]
+    fn test_classify_ace_extended_right() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowedObject,
+            ..make_ace(0x00000100, None)
+        };
+        assert_eq!(classify_ace(&ace), EdgeType::AllExtendedRights);
+    }
+
+    #[test]
+    fn test_classify_ace_force_change_password_guid() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowedObject,
+            ..make_ace(0x00000100, Some("00299570-246d-11d0-a768-00aa006e0529"))
+        };
+        assert_eq!(classify_ace(&ace), EdgeType::ForceChangePassword);
+    }
+
+    #[test]
+    fn test_classify_ace_get_changes_guid() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowedObject,
+            ..make_ace(0x00000100, Some("1131f6aa-9c07-11d1-f79f-00c04fc2dcd2"))
+        };
+        assert_eq!(classify_ace(&ace), EdgeType::GetChanges);
+    }
+
+    #[test]
+    fn test_classify_ace_get_changes_all_guid() {
+        let ace = AceEntry {
+            ace_type: AceType::AccessAllowedObject,
+            ..make_ace(0x00000100, Some("1131f6ad-9c07-11d1-f79f-00c04fc2dcd2"))
+        };
+        assert_eq!(classify_ace(&ace), EdgeType::GetChangesAll);
+    }
+
+    #[test]
+    fn test_classify_ace_unknown_mask_returns_custom() {
+        match classify_ace(&make_ace(0x00000001, None)) {
+            EdgeType::Custom(s) => assert!(s.contains("0x00000001")),
+            other => panic!("Expected Custom, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_ingest_acls_adds_edges() {
+        let mut graph = AttackGraph::new();
+        let domain = "corp.local";
+        graph.metadata.insert("domain".into(), domain.into());
+
+        // Add victim user with DN
+        graph.add_node(AdNode {
+            name: "victim".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=victim,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        // Add attacker user (source of ACL)
+        graph.add_node(AdNode {
+            name: "attacker".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=attacker,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        let mut sid_to_name = HashMap::new();
+        sid_to_name.insert("S-1-5-21-1001".into(), "attacker".into());
+
+        let enum_data = DomainEnumeration {
+            domain: domain.into(),
+            base_dn: "DC=corp,DC=local".into(),
+            users: vec![],
+            computers: vec![],
+            groups: vec![],
+            trusts: vec![],
+            kerberoastable: vec![],
+            asrep_roastable: vec![],
+            unconstrained_delegation: vec![],
+            constrained_delegation_users: vec![],
+            constrained_delegation_computers: vec![],
+            domain_admins: vec![],
+            spn_map: HashMap::new(),
+            gpos: vec![],
+            acl_entries: vec![DaclInfo {
+                object_dn: "CN=victim,CN=Users,DC=corp,DC=local".into(),
+                owner_sid: "S-1-5-21-500".into(),
+                aces: vec![AceEntry {
+                    ace_type: AceType::AccessAllowed,
+                    ace_flags: 0,
+                    access_mask: 0x10000000,
+                    trustee_sid: "S-1-5-21-1001".into(),
+                    object_type: None,
+                    inherited_object_type: None,
+                }],
+            }],
+            sid_to_name,
+        };
+
+        let initial_edges = graph.edge_count();
+        graph.ingest_acls(&enum_data);
+        assert_eq!(graph.edge_count(), initial_edges + 1);
+
+        // Verify the edge type is GenericAll
+        let victim_idx = graph.find_node("victim@corp.local").unwrap();
+        let attacker_idx = graph.find_node("attacker@corp.local").unwrap();
+        let edges: Vec<_> = graph
+            .graph
+            .edges_connecting(attacker_idx, victim_idx)
+            .map(|e| e.weight().clone())
+            .collect();
+        assert!(edges.contains(&EdgeType::GenericAll));
+    }
+
+    #[test]
+    fn test_ingest_acls_skips_denied_aces() {
+        let mut graph = AttackGraph::new();
+        let domain = "corp.local";
+
+        graph.add_node(AdNode {
+            name: "victim".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=victim,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+        graph.add_node(AdNode {
+            name: "attacker".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=attacker,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        let mut sid_to_name = HashMap::new();
+        sid_to_name.insert("S-1-5-21-1001".into(), "attacker".into());
+
+        let enum_data = DomainEnumeration {
+            domain: domain.into(),
+            base_dn: "DC=corp,DC=local".into(),
+            users: vec![],
+            computers: vec![],
+            groups: vec![],
+            trusts: vec![],
+            kerberoastable: vec![],
+            asrep_roastable: vec![],
+            unconstrained_delegation: vec![],
+            constrained_delegation_users: vec![],
+            constrained_delegation_computers: vec![],
+            domain_admins: vec![],
+            spn_map: HashMap::new(),
+            gpos: vec![],
+            acl_entries: vec![DaclInfo {
+                object_dn: "CN=victim,CN=Users,DC=corp,DC=local".into(),
+                owner_sid: "S-1-5-21-500".into(),
+                aces: vec![AceEntry {
+                    ace_type: AceType::AccessDenied,
+                    ace_flags: 0,
+                    access_mask: 0x10000000,
+                    trustee_sid: "S-1-5-21-1001".into(),
+                    object_type: None,
+                    inherited_object_type: None,
+                }],
+            }],
+            sid_to_name,
+        };
+
+        let initial_edges = graph.edge_count();
+        graph.ingest_acls(&enum_data);
+        // AccessDenied ACEs should be skipped
+        assert_eq!(graph.edge_count(), initial_edges);
+    }
+
+    #[test]
+    fn test_ingest_acls_skips_unknown_sids() {
+        let mut graph = AttackGraph::new();
+        let domain = "corp.local";
+
+        graph.add_node(AdNode {
+            name: "victim".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=victim,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        let enum_data = DomainEnumeration {
+            domain: domain.into(),
+            base_dn: "DC=corp,DC=local".into(),
+            users: vec![],
+            computers: vec![],
+            groups: vec![],
+            trusts: vec![],
+            kerberoastable: vec![],
+            asrep_roastable: vec![],
+            unconstrained_delegation: vec![],
+            constrained_delegation_users: vec![],
+            constrained_delegation_computers: vec![],
+            domain_admins: vec![],
+            spn_map: HashMap::new(),
+            gpos: vec![],
+            acl_entries: vec![DaclInfo {
+                object_dn: "CN=victim,CN=Users,DC=corp,DC=local".into(),
+                owner_sid: "S-1-5-21-500".into(),
+                aces: vec![AceEntry {
+                    ace_type: AceType::AccessAllowed,
+                    ace_flags: 0,
+                    access_mask: 0x10000000,
+                    trustee_sid: "S-1-5-32-544".into(), // Administrators - not in sid_to_name
+                    object_type: None,
+                    inherited_object_type: None,
+                }],
+            }],
+            sid_to_name: HashMap::new(), // empty
+        };
+
+        let initial_edges = graph.edge_count();
+        graph.ingest_acls(&enum_data);
+        // Unknown SIDs should be skipped
+        assert_eq!(graph.edge_count(), initial_edges);
+    }
+
+    #[test]
+    fn test_ingest_acls_skips_unknown_target_dn() {
+        let mut graph = AttackGraph::new();
+        let domain = "corp.local";
+
+        // Only add attacker, not victim
+        graph.add_node(AdNode {
+            name: "attacker".into(),
+            node_type: NodeType::User,
+            domain: domain.into(),
+            distinguished_name: Some("CN=attacker,CN=Users,DC=corp,DC=local".into()),
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        let mut sid_to_name = HashMap::new();
+        sid_to_name.insert("S-1-5-21-1001".into(), "attacker".into());
+
+        let enum_data = DomainEnumeration {
+            domain: domain.into(),
+            base_dn: "DC=corp,DC=local".into(),
+            users: vec![],
+            computers: vec![],
+            groups: vec![],
+            trusts: vec![],
+            kerberoastable: vec![],
+            asrep_roastable: vec![],
+            unconstrained_delegation: vec![],
+            constrained_delegation_users: vec![],
+            constrained_delegation_computers: vec![],
+            domain_admins: vec![],
+            spn_map: HashMap::new(),
+            gpos: vec![],
+            acl_entries: vec![DaclInfo {
+                object_dn: "CN=victim,CN=Users,DC=corp,DC=local".into(),
+                owner_sid: "S-1-5-21-500".into(),
+                aces: vec![AceEntry {
+                    ace_type: AceType::AccessAllowed,
+                    ace_flags: 0,
+                    access_mask: 0x10000000,
+                    trustee_sid: "S-1-5-21-1001".into(),
+                    object_type: None,
+                    inherited_object_type: None,
+                }],
+            }],
+            sid_to_name,
+        };
+
+        let initial_edges = graph.edge_count();
+        graph.ingest_acls(&enum_data);
+        // Unknown target DN should be skipped
+        assert_eq!(graph.edge_count(), initial_edges);
+    }
+
+    #[test]
+    fn test_ingest_acls_empty_is_noop() {
+        let mut graph = AttackGraph::new();
+        graph.add_node(AdNode {
+            name: "user1".into(),
+            node_type: NodeType::User,
+            domain: "corp.local".into(),
+            distinguished_name: None,
+            enabled: true,
+            properties: HashMap::new(),
+        });
+
+        let enum_data = DomainEnumeration {
+            domain: "corp.local".into(),
+            base_dn: "DC=corp,DC=local".into(),
+            users: vec![],
+            computers: vec![],
+            groups: vec![],
+            trusts: vec![],
+            kerberoastable: vec![],
+            asrep_roastable: vec![],
+            unconstrained_delegation: vec![],
+            constrained_delegation_users: vec![],
+            constrained_delegation_computers: vec![],
+            domain_admins: vec![],
+            spn_map: HashMap::new(),
+            gpos: vec![],
+            acl_entries: vec![],
+            sid_to_name: HashMap::new(),
+        };
+
+        let initial = graph.edge_count();
+        graph.ingest_acls(&enum_data);
+        assert_eq!(graph.edge_count(), initial);
     }
 }

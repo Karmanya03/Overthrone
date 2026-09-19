@@ -1335,6 +1335,8 @@ pub struct DomainEnumeration {
     pub gpos: Vec<GpoInfo>,
     /// acl entries field
     pub acl_entries: Vec<DaclInfo>,
+    /// SID -> SAM account name mapping (built during enumeration)
+    pub sid_to_name: HashMap<String, String>,
 }
 
 // -----------------------------------------------------
@@ -3799,6 +3801,8 @@ impl LdapSession {
             .enumerate_acls("(|(adminCount=1)(objectClass=domain))")
             .await
             .unwrap_or_default();
+        // Build SID -> name map for ACL graph ingestion
+        let sid_to_name = build_sid_map(self).await;
 
         let result = DomainEnumeration {
             domain: self.domain.clone(),
@@ -3816,6 +3820,7 @@ impl LdapSession {
             spn_map,
             gpos,
             acl_entries,
+            sid_to_name,
         };
 
         info!("=== Domain enumeration complete ===");
@@ -4364,7 +4369,9 @@ fn ber_write_length(buf: &mut Vec<u8>, len: usize) {
 
 /// Parse a binary NT Security Descriptor (SECURITY_DESCRIPTOR_RELATIVE format).
 /// Returns `(owner_sid, Vec<AceEntry>)` containing the DACL entries.
-fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<AceEntry>), String> {
+pub fn parse_security_descriptor(
+    data: &[u8],
+) -> std::result::Result<(String, Vec<AceEntry>), String> {
     // SECURITY_DESCRIPTOR_RELATIVE layout:
     //   0: Revision (u8) -- must be 1
     //   1: Sbz1 (u8)
@@ -4495,6 +4502,46 @@ fn parse_security_descriptor(data: &[u8]) -> std::result::Result<(String, Vec<Ac
     }
 
     Ok((owner_sid, aces))
+}
+
+/// Build a SID-to-SAM-account-name mapping for users and computers.
+/// Used by ACL ingestion to resolve trustee SIDs to graph node names.
+pub async fn build_sid_map(session: &mut LdapSession) -> HashMap<String, String> {
+    let filter = "(|(objectClass=user)(objectClass=computer))";
+    let attrs = &["sAMAccountName", "objectSid"];
+    let base = session.base_dn.clone();
+    let entries: Vec<SearchEntry> = match &mut session.raw {
+        Some(raw) => raw.search(&base, filter, attrs).await.unwrap_or_default(),
+        None => {
+            let Some(ldap) = session.ldap.as_mut() else {
+                return HashMap::new();
+            };
+            let (rs, _res) = match ldap.search(&base, Scope::Subtree, filter, attrs).await {
+                Ok(sr) => match sr.success() {
+                    Ok(pair) => pair,
+                    Err(_) => return HashMap::new(),
+                },
+                Err(_) => return HashMap::new(),
+            };
+            rs.into_iter().map(SearchEntry::construct).collect()
+        }
+    };
+
+    let mut map = HashMap::new();
+    for entry in &entries {
+        if let Some(name) = entry
+            .attrs
+            .get("sAMAccountName")
+            .and_then(|v: &Vec<String>| v.first())
+            && let Some(sid_bytes) = entry
+                .bin_attrs
+                .get("objectSid")
+                .and_then(|v: &Vec<Vec<u8>>| v.first())
+        {
+            map.insert(parse_sid(sid_bytes), name.clone());
+        }
+    }
+    map
 }
 
 /// Parse a SID from raw bytes to string format (S-1-5-21-...)
