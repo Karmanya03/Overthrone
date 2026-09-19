@@ -126,7 +126,9 @@ fn finding(msg: &str) {
 fn extract_user_from_hash(hash: &str) -> Option<String> {
     let parts: Vec<&str> = hash.split('$').collect();
     if parts.len() >= 4 {
-        let user_realm_spn = parts[3];
+        // Impacket/hashcat kerberoast hashes start this field with the `*` that
+        // delimits the `*user$realm$spn*` triple, so strip it before splitting.
+        let user_realm_spn = parts[3].strip_prefix('*').unwrap_or(parts[3]);
         if let Some(user) = user_realm_spn.split('*').next()
             && !user.is_empty()
         {

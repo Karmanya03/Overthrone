@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+use ldap3::{Ldap, LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use overthrone_core::error::{OverthroneError, Result};
 use tracing::info;
 
@@ -29,7 +29,7 @@ impl LdapEnumerator {
                 target: self.server.clone(),
                 reason: format!("LDAP connect failed: {e}"),
             })?;
-        drive!(conn);
+        overthrone_core::proto::ldap::spawn_ldap_driver(conn);
         let res = ldap.simple_bind("", "").await.map_err(|e| OverthroneError::LdapBind {
             user: "anonymous".to_string(),
             reason: format!("Anonymous bind failed: {e}"),
@@ -57,7 +57,7 @@ impl LdapEnumerator {
                 target: self.server.clone(),
                 reason: format!("LDAP connect failed: {e}"),
             })?;
-        drive!(conn);
+        overthrone_core::proto::ldap::spawn_ldap_driver(conn);
         let bind_dn = format!("{}\\{}", domain, username);
         let res = ldap.simple_bind(&bind_dn, password).await.map_err(|e| OverthroneError::LdapBind {
             user: bind_dn.clone(),

@@ -978,7 +978,11 @@ fn handle_mouse(app: &mut WizardApp, mouse: crossterm::event::MouseEvent) {
                         // Double-click (same row) enters edit mode
                         if prev == Some(content_row) {
                             app.active_input = Some(content_row);
-                            app.input_cursor = 0;
+                            app.input_cursor = app
+                                .input_fields
+                                .get(content_row)
+                                .map(|(_, v)| char_count(v))
+                                .unwrap_or(0);
                         }
                     }
                 }
@@ -1182,28 +1186,102 @@ fn handle_sub_menu(app: &mut WizardApp, key: KeyEvent) {
     }
 }
 
+/// Number of characters (not bytes) in `s`.
+fn char_count(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Byte offset at which the character with index `char_idx` starts.
+/// Indices past the end clamp to `s.len()`.
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
+/// Whether a key event should be inserted as literal text.
+///
+/// Shifted punctuation (`!`, `@`, `#`, `%`, ...) arrives with
+/// [`KeyModifiers::SHIFT`] and must be accepted. AltGr, used for symbols on
+/// many layouts, arrives as `CONTROL | ALT` and is also text; a bare Ctrl or
+/// Alt shortcut is not.
+fn accepts_text_input(key: &KeyEvent) -> bool {
+    let mods = key.modifiers;
+    // AltGr (used for symbols on many layouts) reports as CONTROL + ALT.
+    let alt_gr = mods.contains(KeyModifiers::CONTROL) && mods.contains(KeyModifiers::ALT);
+    alt_gr || (!mods.contains(KeyModifiers::CONTROL) && !mods.contains(KeyModifiers::ALT))
+}
+
 fn handle_target_config(app: &mut WizardApp, key: KeyEvent) {
-    if app.active_input.is_some() {
-        // Text input mode
-        let input_idx = app.active_input.unwrap();
+    if let Some(input_idx) = app.active_input {
+        // Text input mode. Clamp the cursor to the value's character range
+        // first, so a stale cursor can never split a multi-byte character.
+        let max = app
+            .input_fields
+            .get(input_idx)
+            .map(|(_, v)| char_count(v))
+            .unwrap_or(0);
+        app.input_cursor = app.input_cursor.min(max);
+
         match key.code {
             KeyCode::Esc | KeyCode::Enter => {
                 app.active_input = None;
             }
+            KeyCode::Tab => {
+                // Commit the value and move to the next field, wrapping around.
+                let next = (input_idx + 1) % app.input_fields.len().max(1);
+                app.input_cursor = app
+                    .input_fields
+                    .get(next)
+                    .map(|(_, v)| char_count(v))
+                    .unwrap_or(0);
+                app.active_input = Some(next);
+                app.menu_state.select(Some(next));
+            }
             KeyCode::Backspace => {
-                if let Some((_, v)) = app.input_fields.get_mut(input_idx) {
-                    v.pop();
+                if app.input_cursor > 0 {
+                    app.input_cursor -= 1;
+                    let cur = app.input_cursor;
+                    if let Some((_, v)) = app.input_fields.get_mut(input_idx) {
+                        let byte = char_to_byte(v, cur);
+                        v.remove(byte);
+                    }
+                }
+            }
+            KeyCode::Delete => {
+                if let Some((_, v)) = app.input_fields.get_mut(input_idx)
+                    && app.input_cursor < char_count(v)
+                {
+                    let cur = app.input_cursor;
+                    let byte = char_to_byte(v, cur);
+                    v.remove(byte);
                 }
             }
             KeyCode::Left => {
                 app.input_cursor = app.input_cursor.saturating_sub(1);
             }
             KeyCode::Right => {
-                app.input_cursor += 1;
+                if let Some((_, v)) = app.input_fields.get(input_idx)
+                    && app.input_cursor < char_count(v)
+                {
+                    app.input_cursor += 1;
+                }
             }
-            KeyCode::Char(c) => {
+            KeyCode::Home => {
+                app.input_cursor = 0;
+            }
+            KeyCode::End => {
+                if let Some((_, v)) = app.input_fields.get(input_idx) {
+                    app.input_cursor = char_count(v);
+                }
+            }
+            KeyCode::Char(c) if accepts_text_input(&key) => {
                 if let Some((_, v)) = app.input_fields.get_mut(input_idx) {
-                    v.push(c);
+                    let cur = app.input_cursor;
+                    let byte = char_to_byte(v, cur);
+                    v.insert(byte, c);
+                    app.input_cursor = cur + 1;
                 }
             }
             _ => {}
@@ -1227,8 +1305,12 @@ fn handle_target_config(app: &mut WizardApp, key: KeyEvent) {
                 .select(Some(if cur < max { cur + 1 } else { 0 }));
         }
         KeyCode::Enter | KeyCode::Char('e') => {
-            app.active_input = app.menu_state.selected();
-            app.input_cursor = 0;
+            let idx = app.menu_state.selected();
+            app.active_input = idx;
+            app.input_cursor = idx
+                .and_then(|i| app.input_fields.get(i))
+                .map(|(_, v)| char_count(v))
+                .unwrap_or(0);
         }
         KeyCode::Tab | KeyCode::Char('t') => {
             app.screen = WizardScreen::MainMenu;
@@ -1655,13 +1737,20 @@ fn draw_target_config(frame: &mut Frame, area: Rect, app: &WizardApp) {
         };
 
         let display_value = if value.is_empty() {
-            field.placeholder().to_string()
+            if is_active {
+                "_".to_string()
+            } else {
+                field.placeholder().to_string()
+            }
         } else if field.is_secret() {
             format!(
                 "{}{}",
                 "*".repeat(value.len().min(20)),
                 if is_active { "_" } else { "" }
             )
+        } else if is_active {
+            let (before, after) = value.split_at(char_to_byte(value, app.input_cursor));
+            format!("{before}|{after}")
         } else {
             value.clone()
         };
@@ -1804,4 +1893,48 @@ fn draw_footer(frame: &mut Frame, area: Rect, app: &WizardApp) {
     )]))
     .style(Style::default().bg(Color::DarkGray));
     frame.render_widget(footer, area);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn char_helpers_are_unicode_safe() {
+        // "p" + e-acute (2 bytes) + emoji (4 bytes) + "ss"
+        let value = "p\u{e9}\u{1f600}ss";
+        assert_eq!(char_count(value), 5);
+        assert_eq!(char_to_byte(value, 0), 0);
+        assert_eq!(char_to_byte(value, 2), "p\u{e9}".len());
+        // Past the end clamps to the byte length, so slicing never panics.
+        assert_eq!(char_to_byte(value, 99), value.len());
+    }
+
+    #[test]
+    fn text_input_accepts_shifted_symbols_and_altgr() {
+        for code in ['!', '@', '#', '%', '^', '&', '*', '(', ')', '_', '+'] {
+            assert!(accepts_text_input(&KeyEvent::new(
+                KeyCode::Char(code),
+                KeyModifiers::SHIFT
+            )));
+        }
+        assert!(accepts_text_input(&KeyEvent::new(
+            KeyCode::Char('a'),
+            KeyModifiers::NONE
+        )));
+        // AltGr symbols arrive as CONTROL + ALT.
+        assert!(accepts_text_input(&KeyEvent::new(
+            KeyCode::Char('@'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT
+        )));
+        // A bare Ctrl/Alt shortcut must not type a character.
+        assert!(!accepts_text_input(&KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL
+        )));
+        assert!(!accepts_text_input(&KeyEvent::new(
+            KeyCode::Char('x'),
+            KeyModifiers::ALT
+        )));
+    }
 }

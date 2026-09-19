@@ -17,7 +17,7 @@
 //! - Automatic safety abort on restrictive lockout policies
 
 use crate::runner::HuntConfig;
-use ldap3::{LdapConnAsync, drive, ldap_escape};
+use ldap3::{LdapConnAsync, ldap_escape};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::ldap as ldap_proto;
 use serde::{Deserialize, Serialize};
@@ -351,7 +351,7 @@ async fn attempt_ldap_bind(ldap_url: &str, upn: &str, password: &str) -> BindOut
         Ok(pair) => pair,
         Err(e) => return BindOutcome::Error(format!("connect: {e}")),
     };
-    drive!(conn);
+    overthrone_core::proto::ldap::spawn_ldap_driver(conn);
 
     let res = ldap.simple_bind(upn, password).await;
     let _ = ldap.unbind().await;

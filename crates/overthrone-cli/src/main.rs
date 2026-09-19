@@ -3196,11 +3196,16 @@ async fn async_main() -> i32 {
         apply_config_layer(&mut cli, &config, "config");
     }
 
+    // `ldap3` logs a WARN when the DC resets the socket while the client is
+    // unbinding/closing it (e.g. "socket receive error: ... forcibly closed").
+    // That is a normal teardown, but it reads like a failure after every LDAP
+    // search, so keep only genuine errors from that crate. Our own LDAP
+    // diagnostics are unaffected; set RUST_LOG to override.
     let filter = match cli.verbose {
-        0 => "warn",
-        1 => "info",
-        2 => "debug",
-        _ => "trace",
+        0 => "warn,ldap3=error",
+        1 => "info,ldap3=error",
+        2 => "debug,ldap3=error",
+        _ => "trace,ldap3=error",
     };
 
     if cli.json_log {
@@ -6483,14 +6488,14 @@ fn print_preauth_result(result: &overthrone_core::scan::preauth_discovery::PreAu
 }
 
 async fn anonymous_ldap_probe(dc: &str) -> std::result::Result<bool, String> {
-    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 
     let url = format!("ldap://{}:389", dc);
     let settings = LdapConnSettings::new().set_conn_timeout(std::time::Duration::from_secs(5));
     let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
         .await
         .map_err(|e| format!("connect to {url} failed: {e}"))?;
-    drive!(conn);
+    overthrone_core::proto::ldap::spawn_ldap_driver(conn);
 
     let bind = ldap
         .simple_bind("", "")
@@ -6554,7 +6559,7 @@ async fn anonymous_ldap_probe(dc: &str) -> std::result::Result<bool, String> {
 
 #[allow(dead_code)]
 async fn anonymous_ldaps_probe(dc: &str) -> std::result::Result<bool, String> {
-    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 
     let url = format!("ldaps://{}:636", dc);
     let settings = LdapConnSettings::new()
@@ -6563,7 +6568,7 @@ async fn anonymous_ldaps_probe(dc: &str) -> std::result::Result<bool, String> {
     let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url)
         .await
         .map_err(|e| format!("connect to {url} failed: {e}"))?;
-    drive!(conn);
+    overthrone_core::proto::ldap::spawn_ldap_driver(conn);
 
     let bind = ldap
         .simple_bind("", "")
@@ -6646,12 +6651,12 @@ async fn smb_null_probe(dc: &str) -> std::result::Result<bool, String> {
 }
 
 async fn discover_domain_from_rootdse(dc: &str) -> Option<String> {
-    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+    use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 
     let url = format!("ldap://{}:389", dc);
     let settings = LdapConnSettings::new().set_conn_timeout(std::time::Duration::from_secs(4));
     let (conn, mut ldap) = LdapConnAsync::with_settings(settings, &url).await.ok()?;
-    drive!(conn);
+    overthrone_core::proto::ldap::spawn_ldap_driver(conn);
 
     let bind = ldap.simple_bind("", "").await.ok()?;
     if bind.rc != 0 {

@@ -8,7 +8,7 @@
 use crate::error::{OverthroneError, Result};
 use crate::proto::ntlm::{NtlmAuthConfig, NtlmSigner};
 use ldap3::controls::{Control, ControlType, PagedResults, RawControl};
-use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry, drive};
+use ldap3::{LdapConnAsync, LdapConnSettings, Scope, SearchEntry};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -541,6 +541,54 @@ impl RawLdapConn {
         Ok(entries)
     }
 
+    /// LDAP search with raw BER-encoded controls attached.
+    pub(crate) async fn search_with_controls(
+        &mut self,
+        base: &str,
+        filter: &str,
+        attrs: &[&str],
+        controls: &[Vec<u8>],
+    ) -> crate::error::Result<Vec<ldap3::SearchEntry>> {
+        let id = self.next_msg_id();
+        let req = build_search_request_with_controls(id, base, filter, attrs, controls);
+        self.send_message(&req).await?;
+
+        let mut entries: Vec<ldap3::SearchEntry> = Vec::new();
+
+        loop {
+            let msg = self.recv_message().await?;
+            match classify_ldap_message(&msg) {
+                LdapMsgKind::SearchEntry => {
+                    if let Some(e) = parse_search_result_entry(&msg) {
+                        entries.push(e);
+                    }
+                }
+                LdapMsgKind::SearchDone(rc) => {
+                    if rc == 0 || rc == 4 {
+                        break;
+                    }
+                    if rc == 10 {
+                        break;
+                    }
+                    return Err(OverthroneError::Ldap {
+                        target: base.to_string(),
+                        reason: format!(
+                            "Search failed (rc={rc}): {}",
+                            ldap_rc_to_string(rc as u32)
+                        ),
+                    });
+                }
+                LdapMsgKind::SearchReferral(uris) => {
+                    warn!("LDAP referral received: {:?}", uris);
+                    break;
+                }
+                LdapMsgKind::Other => {}
+            }
+        }
+
+        Ok(entries)
+    }
+
     pub(crate) async fn disconnect(&mut self) {
         // Send UnbindRequest (tag 0x42 = [APPLICATION 2] primitive), signed like
         // every other PDU when the security layer is active.
@@ -552,6 +600,21 @@ impl RawLdapConn {
         let unbind = ber_tlv(0x30, &msg_body);
         let _ = self.send_message(&unbind).await;
     }
+}
+
+/// Spawn the ldap3 connection driver.
+///
+/// Upstream's `drive!` macro logs `warn!("LDAP connection error: ...")` for
+/// any driver error, but that fires on every ordinary teardown: a Windows DC
+/// resets the socket as the client unbinds, so a successful `enum all` used to
+/// end each LDAP search with a scary warning. Keep it at `debug` where it
+/// belongs.
+pub fn spawn_ldap_driver(conn: LdapConnAsync) {
+    tokio::spawn(async move {
+        if let Err(e) = conn.drive().await {
+            debug!("LDAP connection closed: {e}");
+        }
+    });
 }
 
 // ---------------- BER helpers ----------------
@@ -638,6 +701,17 @@ fn build_bind_sasl(_scratch: &mut [u8], msg_id: u32, mechanism: &str, creds: &[u
 
 /// Build an LDAP SearchRequest.
 fn build_search_request(msg_id: u32, base: &str, filter: &str, attrs: &[&str]) -> Vec<u8> {
+    build_search_request_with_controls(msg_id, base, filter, attrs, &[])
+}
+
+/// Build an LDAP SearchRequest with optional raw BER-encoded controls.
+fn build_search_request_with_controls(
+    msg_id: u32,
+    base: &str,
+    filter: &str,
+    attrs: &[&str],
+    controls: &[Vec<u8>],
+) -> Vec<u8> {
     let mut search = Vec::new();
     search.extend_from_slice(&ber_octet_string(base.as_bytes()));
     search.extend_from_slice(&ber_enumerated(2)); // scope = wholeSubtree
@@ -658,6 +732,15 @@ fn build_search_request(msg_id: u32, base: &str, filter: &str, attrs: &[&str]) -
     let mut msg = Vec::new();
     msg.extend_from_slice(&ber_integer(msg_id));
     msg.extend_from_slice(&search_req);
+
+    if !controls.is_empty() {
+        let mut all_ctrls = Vec::new();
+        for ctrl in controls {
+            all_ctrls.extend_from_slice(ctrl);
+        }
+        msg.extend_from_slice(&ber_tlv(0xA0, &all_ctrls)); // [0] controls (context-constructed)
+    }
+
     ber_sequence(&msg)
 }
 
@@ -1851,7 +1934,7 @@ impl LdapSession {
                 reason: format!("Connection failed: {e}"),
             })?;
 
-        drive!(conn);
+        spawn_ldap_driver(conn);
 
         // Build bind DN: use UPN (user@domain) format for Kerberos compatibility.
         // DOMAIN\user (NTLM) format breaks Kerberos LDAP bind; UPN works for both.
@@ -1994,7 +2077,7 @@ impl LdapSession {
                 reason: format!("GC connection failed: {e}"),
             })?;
 
-        drive!(conn);
+        spawn_ldap_driver(conn);
 
         let bind_dn = if username.contains('\\') || username.contains('@') {
             username.to_string()
@@ -2104,7 +2187,7 @@ impl LdapSession {
                 reason: format!("Connection failed: {e}"),
             })?;
 
-        drive!(conn);
+        spawn_ldap_driver(conn);
 
         let result = ldap.simple_bind("", "").await;
 
@@ -3344,21 +3427,28 @@ impl LdapSession {
     pub async fn enumerate_acls(&mut self, filter: &str) -> Result<Vec<DaclInfo>> {
         info!("Enumerating ACLs with filter: {filter}");
 
-        // Build SD_FLAGS control to request DACL + Owner
-        let sd_ctrl = build_sd_flags_control(SD_FLAGS_DACL_OWNER);
-
         let base = self.base_dn.clone();
+        let sd_flags_raw = encode_control_ber(SD_FLAGS_OID, true, &{
+            let mut inner = Vec::new();
+            ber_write_integer(&mut inner, SD_FLAGS_DACL_OWNER as i64);
+            let mut val = Vec::new();
+            val.push(0x30);
+            ber_write_length(&mut val, inner.len());
+            val.extend(inner);
+            val
+        });
+        let controls = vec![sd_flags_raw];
+
         let entries: Vec<SearchEntry> = if let Some(raw) = self.raw.as_mut() {
-            // Raw backend: search without SD_FLAGS control (no binary security descriptor)
-            warn!(
-                "enumerate_acls: raw NTLM session does not support SD_FLAGS control; nTSecurityDescriptor will be unavailable"
-            );
-            raw.search(&base, filter, ACL_ATTRS).await?
+            // Raw backend: use search_with_controls to send SD_FLAGS
+            raw.search_with_controls(&base, filter, ACL_ATTRS, &controls)
+                .await?
         } else {
             let ldap = self.ldap.as_mut().ok_or_else(|| OverthroneError::Ldap {
                 target: self.dc_ip.clone(),
                 reason: "No LDAP session available".to_string(),
             })?;
+            let sd_ctrl = build_sd_flags_control(SD_FLAGS_DACL_OWNER);
             let (rs, _res) = ldap
                 .with_controls(vec![sd_ctrl])
                 .search(&base, Scope::Subtree, filter, ACL_ATTRS)
@@ -3376,14 +3466,16 @@ impl LdapSession {
         };
 
         let mut results = Vec::new();
+        let mut missing_sd = 0usize;
+        let mut unparsable = 0usize;
         for entry in &entries {
             // nTSecurityDescriptor is a binary attribute
-            if let Some(sd_bytes) = entry
+            match entry
                 .bin_attrs
                 .get("nTSecurityDescriptor")
                 .and_then(|v| v.first())
             {
-                match parse_security_descriptor(sd_bytes) {
+                Some(sd_bytes) => match parse_security_descriptor(sd_bytes) {
                     Ok(dacl) => {
                         results.push(DaclInfo {
                             object_dn: entry.dn.clone(),
@@ -3392,10 +3484,24 @@ impl LdapSession {
                         });
                     }
                     Err(e) => {
+                        unparsable += 1;
                         debug!("Failed to parse SD for {}: {e}", entry.dn);
                     }
-                }
+                },
+                None => missing_sd += 1,
             }
+        }
+
+        // A bare "0 ACLs" result is otherwise indistinguishable from "nothing
+        // dangerous here". Surface it, because the usual causes -- a missing
+        // SD_FLAGS control or an account without ReadProperty on
+        // nTSecurityDescriptor -- are actionable.
+        if !entries.is_empty() && results.is_empty() {
+            warn!(
+                "ACL enumeration matched {} objects but parsed 0 security descriptors \
+                 ({missing_sd} missing nTSecurityDescriptor, {unparsable} unparsable)",
+                entries.len()
+            );
         }
 
         info!(
@@ -4301,6 +4407,25 @@ fn build_sd_flags_control(flags: u32) -> RawControl {
         crit: true,
         val: Some(val),
     }
+}
+
+/// BER-encode an LDAP control for the raw backend.
+/// Format: SEQUENCE { OCTET STRING (oid), [1] BOOLEAN (criticality), OCTET STRING (value) }
+fn encode_control_ber(oid: &str, critical: bool, value: &[u8]) -> Vec<u8> {
+    let mut seq = Vec::new();
+    // OID
+    seq.extend_from_slice(&ber_octet_string(oid.as_bytes()));
+    // Criticality is a plain (Universal) BOOLEAN per RFC 4511 `Control`, the
+    // same tag ldap3 emits (`controls_impl::build_tag`). A context tag such as
+    // [1] here makes a Windows DC reject the whole search as a protocol error.
+    if critical {
+        seq.extend_from_slice(&ber_boolean(true));
+    }
+    // Value
+    if !value.is_empty() {
+        seq.extend_from_slice(&ber_octet_string(value));
+    }
+    ber_tlv(0x30, &seq) // SEQUENCE
 }
 
 /// Extract the paged results cookie from LDAP response controls.
