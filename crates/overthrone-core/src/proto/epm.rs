@@ -1736,7 +1736,7 @@ mod tests {
     #[test]
     fn test_parse_server_info_rejects_garbage() {
         // All-zero payload: return code 0 but version fields are not plausible.
-        assert!(parse_srvsvc_server_info(&vec![0u8; 64]).is_none());
+        assert!(parse_srvsvc_server_info(&[0u8; 64]).is_none());
         // Too short to contain a fixed part.
         assert!(parse_srvsvc_server_info(&[0u8; 20]).is_none());
         assert!(parse_srvsvc_server_info(&[]).is_none());

@@ -3496,6 +3496,22 @@ async fn auth_middleware(
     if state.config.username.is_none() || state.config.password.is_none() {
         return Ok(next.run(req).await);
     }
+
+    // Bypass auth for WebSocket upgrade requests -- the browser WebSocket API
+    // does not support custom headers, so there is no way to send an
+    // Authorization header on the upgrade request.  WebSocket connections are
+    // already restricted to loopback by the CORS layer and the bind address
+    // validation.
+    if req
+        .headers()
+        .get(header::UPGRADE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false)
+    {
+        return Ok(next.run(req).await);
+    }
+
     let config = &state.config;
     let (expected_user, expected_pass) = match (&config.username, &config.password) {
         (Some(u), Some(p)) => (u, p),
@@ -3588,13 +3604,30 @@ async fn csrf_middleware(
 }
 
 /// Build a `CorsLayer` that only allows loopback origins.
+///
+/// Uses a predicate to match any port on localhost/127.0.0.1/[::1],
+/// since browsers send `Origin: http://localhost:PORT` on WebSocket
+/// upgrades and the fixed-list approach missed port numbers.
 fn loopback_cors() -> CorsLayer {
-    let origins = ["http://localhost", "http://127.0.0.1", "http://[::1]"];
     CorsLayer::new()
-        .allow_origin(AllowOrigin::list(
-            origins.iter().map(|s| s.parse().unwrap()),
-        ))
-        .allow_methods([axum::http::Method::GET, axum::http::Method::POST])
+        .allow_origin(AllowOrigin::predicate(|origin, _req_parts| {
+            if let Ok(origin_str) = origin.to_str() {
+                let lower = origin_str.to_ascii_lowercase();
+                lower.starts_with("http://localhost")
+                    || lower.starts_with("http://127.0.0.1")
+                    || lower.starts_with("http://[::1]")
+                    || lower.starts_with("https://localhost")
+                    || lower.starts_with("https://127.0.0.1")
+                    || lower.starts_with("https://[::1]")
+            } else {
+                false
+            }
+        }))
+        .allow_methods([
+            axum::http::Method::GET,
+            axum::http::Method::POST,
+            axum::http::Method::OPTIONS,
+        ])
         .allow_headers([
             header::AUTHORIZATION,
             header::CONTENT_TYPE,

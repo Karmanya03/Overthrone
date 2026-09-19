@@ -3953,7 +3953,7 @@ fn load_graph_from(path: &str) -> std::result::Result<overthrone_core::graph::At
 }
 
 #[cfg(feature = "reaper")]
-pub async fn cmd_bloodhound(_cli: &Cli, action: &BloodHoundAction) -> i32 {
+pub async fn cmd_bloodhound(cli: &Cli, action: &BloodHoundAction) -> i32 {
     banner::print_module_banner("BLOODHOUND");
 
     match action {
@@ -4290,19 +4290,255 @@ pub async fn cmd_bloodhound(_cli: &Cli, action: &BloodHoundAction) -> i32 {
                 output_dir.cyan()
             );
 
+            let creds = match crate::require_creds(cli) {
+                Ok(c) => c,
+                Err(e) => return e,
+            };
+            let dc = match crate::require_dc(cli) {
+                Ok(d) => d,
+                Err(e) => return e,
+            };
+            let domain = cli.domain.as_deref().unwrap_or("").to_string();
+            let (secret, use_hash) = match creds.secret_and_hash_flag() {
+                Ok(v) => v,
+                Err(e) => {
+                    banner::print_fail(&format!("Auth error: {e}"));
+                    return 1;
+                }
+            };
+
             println!(
-                " {} BloodHound LDAP collection is now available via `ovt enum all --output-format json --output {output_dir}`",
-                "[*]".cyan()
+                " {} Connecting to LDAP on {}...",
+                "[*]".bright_black(),
+                dc.cyan()
             );
+
+            let mut ldap = if use_hash {
+                let ldap_user = format!("{}\\{}", domain, creds.username);
+                match overthrone_core::proto::ldap::LdapSession::connect_with_hash(
+                    &dc, &domain, &ldap_user, &secret, false,
+                )
+                .await
+                {
+                    Ok(s) => {
+                        println!(" {} LDAP session established (NTLM hash)", "[+]".green());
+                        s
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("LDAP connect failed: {e}"));
+                        return 1;
+                    }
+                }
+            } else {
+                match overthrone_core::proto::ldap::LdapSession::connect(
+                    &dc,
+                    &domain,
+                    &creds.username,
+                    &secret,
+                    false,
+                )
+                .await
+                {
+                    Ok(s) => {
+                        println!(" {} LDAP session established", "[+]".green());
+                        s
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("LDAP connect failed: {e}"));
+                        return 1;
+                    }
+                }
+            };
+
+            // Resolve domain SID from the domain object
+            println!(" {} Resolving domain SID...", "[*]".bright_black());
+            let domain_sid = match ldap
+                .custom_search("(objectClass=domain)", &["objectSid"])
+                .await
+            {
+                Ok(entries) => {
+                    if let Some(entry) = entries.first() {
+                        entry
+                            .bin_attrs
+                            .get("objectSid")
+                            .and_then(|v| v.first())
+                            .map(|bytes| crate::commands::bh_collect::sid_bytes_to_string(bytes))
+                            .unwrap_or_else(|| "S-1-0-0".to_string())
+                    } else {
+                        "S-1-0-0".to_string()
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to resolve domain SID: {e}, using fallback");
+                    "S-1-0-0".to_string()
+                }
+            };
+            println!(" {} Domain SID: {}", ">".bright_black(), domain_sid.cyan());
+
+            let methods: Vec<&str> = collection.split(',').map(|s| s.trim()).collect();
+            let collect_all = methods.contains(&"all");
+
+            let mut collector = crate::commands::bh_collect::BhCollector::new(
+                &mut ldap,
+                output_dir,
+                &domain_sid,
+                &domain,
+            );
+
+            if collect_all || methods.contains(&"users") {
+                println!(" {} Collecting users...", "[*]".bright_black());
+                let users: Vec<crate::commands::bh_collect::BhUser> =
+                    match collector.collect_users().await {
+                        Ok(u) => u,
+                        Err(e) => {
+                            banner::print_fail(&format!("User collection failed: {e}"));
+                            return 1;
+                        }
+                    };
+                println!(
+                    " {} Collected {} users",
+                    "[+]".green(),
+                    users.len().to_string().yellow()
+                );
+                let path = std::path::Path::new(output_dir).join("users.json");
+                let wrapper = serde_json::json!({ "data": users });
+                if let Err(e) = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                ) {
+                    banner::print_fail(&format!("Write users.json failed: {e}"));
+                }
+            }
+
+            if collect_all || methods.contains(&"computers") {
+                println!(" {} Collecting computers...", "[*]".bright_black());
+                let computers: Vec<crate::commands::bh_collect::BhComputer> =
+                    match collector.collect_computers().await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            banner::print_fail(&format!("Computer collection failed: {e}"));
+                            return 1;
+                        }
+                    };
+                println!(
+                    " {} Collected {} computers",
+                    "[+]".green(),
+                    computers.len().to_string().yellow()
+                );
+                let path = std::path::Path::new(output_dir).join("computers.json");
+                let wrapper = serde_json::json!({ "data": computers });
+                if let Err(e) = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                ) {
+                    banner::print_fail(&format!("Write computers.json failed: {e}"));
+                }
+            }
+
+            if collect_all || methods.contains(&"groups") {
+                println!(" {} Collecting groups...", "[*]".bright_black());
+                let groups: Vec<crate::commands::bh_collect::BhGroup> =
+                    match collector.collect_groups().await {
+                        Ok(g) => g,
+                        Err(e) => {
+                            banner::print_fail(&format!("Group collection failed: {e}"));
+                            return 1;
+                        }
+                    };
+                println!(
+                    " {} Collected {} groups",
+                    "[+]".green(),
+                    groups.len().to_string().yellow()
+                );
+                let path = std::path::Path::new(output_dir).join("groups.json");
+                let wrapper = serde_json::json!({ "data": groups });
+                if let Err(e) = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                ) {
+                    banner::print_fail(&format!("Write groups.json failed: {e}"));
+                }
+            }
+
+            if collect_all || methods.contains(&"domains") {
+                println!(" {} Collecting domains...", "[*]".bright_black());
+                let domains: Vec<crate::commands::bh_collect::BhDomain> =
+                    match collector.collect_domains().await {
+                        Ok(d) => d,
+                        Err(e) => {
+                            banner::print_fail(&format!("Domain collection failed: {e}"));
+                            return 1;
+                        }
+                    };
+                println!(
+                    " {} Collected {} domains",
+                    "[+]".green(),
+                    domains.len().to_string().yellow()
+                );
+                let path = std::path::Path::new(output_dir).join("domains.json");
+                let wrapper = serde_json::json!({ "data": domains });
+                if let Err(e) = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                ) {
+                    banner::print_fail(&format!("Write domains.json failed: {e}"));
+                }
+            }
+
+            if collect_all || methods.contains(&"gpos") {
+                println!(" {} Collecting GPOs...", "[*]".bright_black());
+                let gpos: Vec<serde_json::Value> = match collector.collect_gpos().await {
+                    Ok(g) => g,
+                    Err(e) => {
+                        banner::print_fail(&format!("GPO collection failed: {e}"));
+                        return 1;
+                    }
+                };
+                println!(
+                    " {} Collected {} GPOs",
+                    "[+]".green(),
+                    gpos.len().to_string().yellow()
+                );
+                let path = std::path::Path::new(output_dir).join("gpos.json");
+                let wrapper = serde_json::json!({ "data": gpos });
+                if let Err(e) = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                ) {
+                    banner::print_fail(&format!("Write gpos.json failed: {e}"));
+                }
+            }
+
+            if collect_all || methods.contains(&"ous") {
+                println!(" {} Collecting OUs...", "[*]".bright_black());
+                let ous: Vec<serde_json::Value> = match collector.collect_ous().await {
+                    Ok(o) => o,
+                    Err(e) => {
+                        banner::print_fail(&format!("OU collection failed: {e}"));
+                        return 1;
+                    }
+                };
+                println!(
+                    " {} Collected {} OUs",
+                    "[+]".green(),
+                    ous.len().to_string().yellow()
+                );
+                let path = std::path::Path::new(output_dir).join("ous.json");
+                let wrapper = serde_json::json!({ "data": ous });
+                if let Err(e) = std::fs::write(
+                    &path,
+                    serde_json::to_string_pretty(&wrapper).unwrap_or_default(),
+                ) {
+                    banner::print_fail(&format!("Write ous.json failed: {e}"));
+                }
+            }
+
             println!(
-                " {} The enum all command already collects users, groups, computers, SPNs, delegations, and ACLs",
-                ">".bright_black()
+                " {} Output directory: {}",
+                ">".bright_black(),
+                output_dir.cyan()
             );
-            println!(
-                " {} BloodHound-compatible JSON files are written to the specified directory",
-                ">".bright_black()
-            );
-            banner::print_success("BloodHound collection guidance provided");
+            banner::print_success("BloodHound collection complete");
             0
         }
     }

@@ -481,7 +481,7 @@ impl OvtModule for KerberoastModule {
             .to_string();
         std::fs::create_dir_all(&outdir).ok();
 
-        let outpath = std::path::PathBuf::from(&outdir).join("kerberoast_hashes.txt");
+        let outpath = crate::loot::timestamped_path_in(&outdir, "kerberoast", "txt");
 
         let hunt_config = overthrone_hunter::runner::HuntConfig {
             dc_ip: target.to_string(),
@@ -573,7 +573,7 @@ impl OvtModule for AsreproastModule {
             .to_string();
         std::fs::create_dir_all(&outdir).ok();
 
-        let outpath = std::path::PathBuf::from(&outdir).join("asrep_hashes.txt");
+        let outpath = crate::loot::timestamped_path_in(&outdir, "asrep", "txt");
 
         let domain = params
             .as_ref()
