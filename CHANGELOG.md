@@ -1,5 +1,83 @@
 # Changelog
 
+## v0.4.8 (2026-09-20)
+
+### SMB shell is now a real smbclient
+
+`ovt smb shell` no longer drops into a `C$`-rooted directory walker. It behaves
+like `smbclient //host/share -U user%pass`:
+
+- **Opens directly on a share.** `-s/--share <SHARE>` selects it explicitly; when
+  omitted the first readable non-`IPC$` share is chosen and printed. `--path`
+  sets the initial remote directory.
+- **`-c "ls; get a.txt; exit"`** one-shot mode, matching `smbclient -c`.
+- **Full file-management command set**: `ls`/`dir`, `cd`, `pwd`, `lcd`, `lpwd`,
+  `get`, `put`, `mget`, `mput`, `more`/`cat`, `del`/`rm`, `mkdir`/`md`,
+  `rmdir`/`rd`, `rename`/`mv`, `du`, `stat`/`allinfo`, `shares`, `use`,
+  `showconnect`, `reconnect`, `help`, `exit`.
+- **`recurse`, `prompt`, `mask`** toggles drive wildcard transfers and `du`
+  exactly as they do in smbclient, plus `!<cmd>` for a local shell escape.
+- `ls` now prints smbclient's attribute column (`D`/`A` + `H`/`S`/`R`), byte size
+  and mtime, because `Smb2Connection::query_directory_detailed()` keeps the
+  `SMB2_FILE_DIRECTORY_INFORMATION` timestamps that used to be discarded.
+- The interactive REPL's `smb shell` action now enters this same shell with the
+  session it already holds instead of printing a "use ovt smb shell" hint.
+
+### SMB2 signing: algorithm auto-detection + diagnostics
+
+Server 2022 (build 20348) and Server 2025 announce AES-128-GCM in the
+`SMB2_ENCRYPTION_CAPABILITIES` negotiate context but do not always sign with
+AES-GMAC, and the previous code responded by *disabling signature verification*
+after three failures -- which silently gave up on integrity instead of fixing it.
+
+- New `SigningVariant` enum models the four real (KDF context, algorithm)
+  combinations: `SMBSigningKey`+preauth-hash with CMAC or GMAC, and the 3.0.x
+  `SmbSign` context with CMAC or GMAC.
+- On the first packet whose signature does not validate, the connection probes
+  every candidate against that exact packet and **pins the winner for the rest
+  of the session** -- for signing outgoing packets as well as verifying incoming
+  ones. Verification is only disabled if *no* candidate validates.
+- New `ovt smb sign-diag -t <host>` prints the NTLM exported session key, the
+  cumulative 64-byte pre-auth integrity hash, the cipher-predicted variant, the
+  detected variant and **every candidate signing key**, so the values can be
+  compared byte-for-byte against Impacket/NetExec or Wireshark's SMB2 dissector
+  (`KDF_CounterMode(exported_session_key, b"SMBSigningKey\x00", preauth_hash, 128)`).
+  This is the capture-comparison workflow the signing investigation needed.
+
+### Priority-3 completeness
+
+- **Removed dead duplicate modules.** `crates/overthrone-cli/src/commands/enum_commands/`
+  (`smbclient.rs`, `rpcclient.rs`, `ldap.rs`, `mssql.rs`, ~1,150 lines) was never
+  declared in the module tree, so it was not even compiled, while duplicating the
+  live implementations in `commands/rpc.rs`, `commands/ldap.rs` and `cmd_mssql`.
+  The directory is gone; the maintained implementations are the single source of
+  truth.
+- **`ovt rpc createdomuser` is no longer a stub.** It now issues
+  `SamrCreateUser2InDomain` (opnum 50) for real, parses the returned user handle
+  and RID, and then writes the initial password, reporting NTSTATUS on failure.
+- **`ovt rpc deletedomuser` is no longer a stub.** It now issues `SamrDeleteUser`
+  (opnum 35) against the opened user handle and reports the real status code.
+- **`SmbSession::delete_dir` and `SmbSession::rename`** added, backed by a new
+  `Smb2Connection::set_file_info()` (SMB2_SET_INFO, `FileRenameInformation`) and
+  the `FILE_DELETE_ON_CLOSE` directory-delete path -- these are what smbclient's
+  `rmdir` and `rename` use.
+- **Wizard `target_hosts` is populated properly.** It used to keep only
+  `dnsHostName`, so any computer without a forward record vanished from the
+  attack path. It now merges domain controllers discovered through the
+  `_ldap._tcp.dc._msdcs.<domain>` SRV records (the DNS equivalent of following
+  the LDAP `serverReferenceBL` backlink), falls back to the NetBIOS
+  `sAMAccountName` (`DC01$` -> `DC01`, plus the FQDN for DCs), resolves every
+  candidate to an address, and de-duplicates the result.
+
+### Tests
+
+- 6 new unit tests for the signing variants, the GMAC nonce (including the
+  SIGNED-bit regression), FILETIME/attribute rendering and
+  `FILE_RENAME_INFORMATION` layout; 5 new tests for the `smbclient` shell's path
+  normalisation, wildcard matcher and tokenizer; 4 new tests for the SAMR
+  create/delete builders.
+- 1,214 core tests and 201 CLI tests pass.
+
 ## v0.4.7 (2026-09-17)
 
 ### SMB 3.1.1 Signing Fix (critical)

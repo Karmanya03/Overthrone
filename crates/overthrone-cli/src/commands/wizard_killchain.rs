@@ -7,7 +7,7 @@ use console::style;
 use overthrone_core::exec::{ExecCredentials, auto_exec};
 use overthrone_core::proto::kerberos::{asrep_roast, kerberoast, request_tgt};
 use overthrone_core::proto::laps_ldaps::read_laps_passwords_ws2025;
-use overthrone_core::proto::ldap::LdapSession;
+use overthrone_core::proto::ldap::{AdComputer, LdapSession};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tracing::debug;
@@ -138,6 +138,91 @@ fn extract_user_from_hash(hash: &str) -> Option<String> {
     None
 }
 
+/// Build the wizard's working target list from the LDAP computer objects.
+///
+/// The previous implementation kept only `dnsHostName`, so any computer whose
+/// forward DNS record was missing (very common for member servers and for
+/// lab/GOAD-style environments) silently disappeared from the attack path.
+/// This version, in order:
+///
+/// 1. adds the domain controllers discovered through the
+///    `_ldap._tcp.dc._msdcs.<domain>` SRV records -- the DNS equivalent of
+///    following the LDAP `serverReferenceBL` backlink -- together with their
+///    resolved IPs;
+/// 2. adds every computer's `dnsHostName`, falling back to the NetBIOS
+///    `sAMAccountName` (`DC01$` -> `DC01`, plus `.<domain>` for DCs) when DNS is
+///    absent;
+/// 3. resolves each of those names and merges the resulting addresses, so the
+///    list is directly usable by `auto_exec` without further DNS.
+///
+/// Duplicates are removed case-insensitively and the original ordering is kept.
+async fn build_target_hosts(computers: &[AdComputer], domain: &str) -> Vec<String> {
+    use futures::StreamExt;
+    use std::collections::HashSet;
+
+    fn push(out: &mut Vec<String>, seen: &mut HashSet<String>, value: &str) {
+        let value = value.trim();
+        if value.is_empty() {
+            return;
+        }
+        if seen.insert(value.to_ascii_lowercase()) {
+            out.push(value.to_string());
+        }
+    }
+
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut candidates: Vec<String> = Vec::new();
+
+    // -- 1. Domain controllers via DNS SRV (falls back to nothing on failure) --
+    if let Ok(dcs) = overthrone_core::proto::dns::discover_domain_controllers(domain).await {
+        for (name, ips) in dcs {
+            candidates.push(name.clone());
+            for ip in ips {
+                candidates.push(ip);
+            }
+        }
+    }
+
+    // -- 2. Computer objects ------------------------------------------------
+    for c in computers {
+        let netbios = c.sam_account_name.trim_end_matches('$').to_string();
+        if let Some(dns) = c.dns_hostname.as_ref().filter(|d| !d.is_empty()) {
+            candidates.push(dns.clone());
+        }
+        if !netbios.is_empty() {
+            candidates.push(netbios.clone());
+            // Domain controllers are reachable by their short name only inside
+            // the domain, so also queue the FQDN form.
+            let is_dc = c.user_account_control & 0x2000 != 0; // SERVER_TRUST_ACCOUNT
+            if is_dc && !domain.is_empty() {
+                candidates.push(format!("{netbios}.{domain}"));
+            }
+        }
+    }
+
+    // -- 3. Resolve every candidate to an address ----------------------------
+    let resolved: Vec<(String, Vec<String>)> = futures::stream::iter(candidates.iter().cloned())
+        .map(|name| async move {
+            let addrs = overthrone_core::proto::dns::resolve_hostname(&name)
+                .await
+                .unwrap_or_default();
+            (name, addrs)
+        })
+        .buffer_unordered(16)
+        .collect()
+        .await;
+
+    for (name, addrs) in resolved {
+        push(&mut out, &mut seen, &name);
+        for ip in addrs {
+            push(&mut out, &mut seen, &ip);
+        }
+    }
+
+    out
+}
+
 impl KillchainWizard {
     pub fn new(config: WizardConfig) -> Self {
         let loot_dir = config
@@ -253,10 +338,12 @@ impl KillchainWizard {
                     .map(|c| c.sam_account_name.clone())
                     .collect();
                 if self.config.target_hosts.is_empty() {
-                    self.state.target_hosts = computers
-                        .iter()
-                        .filter_map(|c| c.dns_hostname.clone())
-                        .collect();
+                    let resolved = build_target_hosts(&computers, &self.config.domain).await;
+                    info_line(&format!(
+                        "Target host list: {} name(s)/IP(s)",
+                        resolved.len()
+                    ));
+                    self.state.target_hosts = resolved;
                 } else {
                     self.state.target_hosts = self.config.target_hosts.clone();
                 }

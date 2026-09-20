@@ -8,5 +8,6 @@ pub mod ldap;
 pub mod nxc;
 pub mod rpc;
 pub mod session;
+pub mod smb_shell;
 pub mod wizard;
 pub mod wizard_killchain;

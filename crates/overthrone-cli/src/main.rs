@@ -2274,8 +2274,36 @@ enum SmbAction {
         #[arg(long, required = true)]
         path: String,
     },
-    /// Interactive SMB shell (like smbclient)
+    /// Interactive SMB shell (smbclient-compatible)
+    ///
+    /// Opens the shell directly on the share, exactly like
+    /// `smbclient //host/share -U user%pass`. When `--share` is omitted the
+    /// first readable data share is selected automatically (and printed).
     Shell {
+        /// Target hostname or IP
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Share to open the shell on (default: first readable data share)
+        #[arg(short = 's', long)]
+        share: Option<String>,
+        /// Initial remote directory inside the share
+        #[arg(long)]
+        path: Option<String>,
+        /// Run a ';'-separated command script and exit (like `smbclient -c`)
+        #[arg(short = 'c', long)]
+        commands: Option<String>,
+        /// Skip share enumeration output (used by scripts)
+        #[arg(short = 'q', long)]
+        quiet: bool,
+    },
+    /// Print the SMB signing key derivation inputs and outputs
+    ///
+    /// Dumps the NTLM exported session key, the cumulative pre-auth integrity
+    /// hash and every candidate signing key, so they can be compared
+    /// byte-for-byte against a capture of a known-good client (Impacket,
+    /// NetExec, or Wireshark's SMB2 dissector). This is the diagnostic to run
+    /// when a build such as Server 2022 (20348) rejects signatures.
+    SignDiag {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
@@ -8285,272 +8313,100 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 }
             }
         }
-        SmbAction::Shell { target } => {
-            let smb = match smb_connect(&target).await {
+        SmbAction::Shell {
+            target,
+            share,
+            path,
+            commands,
+            quiet,
+        } => {
+            let session = match smb_connect(&target).await {
                 Ok(s) => s,
                 Err(e) => {
                     banner::print_fail(&format!("SMB connect: {}", e));
                     return 1;
                 }
             };
-            banner::print_success(&format!("Interactive SMB shell on {}", target));
-            banner::print_info(
-                "Commands: ls <path>, cd <dir>, get <rem>, put <loc> <rem>, rm <path>, mkdir <path>, shares, pwd, exit",
-            );
-            let mut cwd = String::new();
-            let mut current_share = String::from("C$");
-            loop {
-                let prompt = format!(
-                    "smb: \\\\{}\\{}> ",
-                    target.cyan(),
-                    format!("{}\\{}", current_share, cwd).yellow()
-                );
-                let mut input = String::new();
-                print!("{}", prompt);
-                use std::io::Write;
-                let _ = std::io::stdout().flush();
-                match std::io::stdin().read_line(&mut input) {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {}
+
+            // smbclient semantics: the shell opens directly on a share.
+            let chosen =
+                commands::smb_shell::SmbShell::choose_share(&session, share.as_deref()).await;
+            if !quiet {
+                banner::print_success(&format!(r"SMB shell on \\{}\{}", target, chosen));
+                if share.is_none() {
+                    banner::print_info(&format!(
+                        "Auto-selected share '{}' -- use 'use <share>' to switch",
+                        chosen
+                    ));
                 }
-                let input = input.trim();
-                if input.is_empty() {
-                    continue;
+                banner::print_info("Type 'help' for the smbclient-compatible command list");
+            }
+
+            let cwd = path.clone().unwrap_or_default();
+            let mut shell = commands::smb_shell::SmbShell::new(session, &target, &chosen, &cwd);
+            shell.set_quiet(quiet);
+
+            let result = match &commands {
+                Some(script) => shell.run_script(script).await,
+                None => shell.run().await,
+            };
+            return match result {
+                Ok(()) => 0,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB shell: {}", e));
+                    1
                 }
-                let parts: Vec<&str> = input.split_whitespace().collect();
-                let cmd = parts[0].to_lowercase();
-                let args = &parts[1..];
-                match cmd.as_str() {
-                    "exit" | "quit" => {
-                        banner::print_info("Exiting SMB shell");
-                        break;
+            };
+        }
+        SmbAction::SignDiag { target } => {
+            let session = match smb_connect(&target).await {
+                Ok(s) => s,
+                Err(e) => {
+                    banner::print_fail(&format!("SMB connect: {}", e));
+                    return 1;
+                }
+            };
+            match session.signing_diagnostics().await {
+                Some(d) => {
+                    println!();
+                    println!("{}", "SMB2 signing diagnostics".bold());
+                    println!(r"  target                 : \\{}", target);
+                    println!("  dialect                : 0x{:04X}", d.dialect);
+                    println!(
+                        "  cipher                 : {} (id=0x{:04X})",
+                        d.cipher, d.cipher_id
+                    );
+                    println!("  signing required       : {}", d.signing_required);
+                    println!(
+                        "  detected variant       : {}",
+                        d.detected_variant
+                            .map(|v| v.name().to_string())
+                            .unwrap_or_else(|| "<not yet probed>".to_string())
+                    );
+                    println!("  cipher-predicted       : {}", d.expected_variant.name());
+                    println!(
+                        "  exported session key   : {}",
+                        hex::encode(&d.exported_session_key)
+                    );
+                    match &d.preauth_hash {
+                        Some(h) => println!("  preauth hash (sha512)  : {}", hex::encode(h)),
+                        None => println!("  preauth hash (sha512)  : <none>"),
                     }
-                    "shares" => match smb.list_shares().await {
-                        Ok(shares) => {
-                            println!();
-                            for s in shares {
-                                println!("  \\\\{}\\{}", target, s);
-                            }
-                        }
-                        Err(e) => println!("{} List shares failed: {}", "[-]".red(), e),
-                    },
-                    "pwd" => {
-                        println!("  \\\\{}\\{}\\{}", target, current_share, cwd);
+                    println!();
+                    println!("  Candidate signing keys (compare with the known-good client):");
+                    for (variant, key) in &d.candidate_keys {
+                        println!("    {:<28} {}", variant.name(), hex::encode(key));
                     }
-                    "ls" => {
-                        let list_path: String = if args.is_empty() {
-                            cwd.clone()
-                        } else {
-                            args.join("\\")
-                        };
-                        let (share, rpath) = if list_path.contains('$') || list_path.contains('/') {
-                            match list_path.split_once(&['/', '\\'][..]) {
-                                Some((s, p)) => (s.to_string(), p.to_string()),
-                                None => (current_share.clone(), list_path.clone()),
-                            }
-                        } else if !list_path.is_empty() {
-                            (current_share.clone(), list_path.clone())
-                        } else {
-                            (current_share.clone(), cwd.clone())
-                        };
-                        match smb.list_directory(&share, &rpath).await {
-                            Ok(entries) => {
-                                for e in &entries {
-                                    if e.is_directory {
-                                        println!("  {}  {}/", "[DIR]".cyan().bold(), e.name.cyan());
-                                    } else {
-                                        println!(
-                                            "  {}  {} ({} bytes)",
-                                            "     ".bright_black(),
-                                            e.name,
-                                            e.size
-                                        );
-                                    }
-                                }
-                            }
-                            Err(e) => println!("{} List failed: {}", "[-]".red(), e),
-                        }
-                    }
-                    "cd" => {
-                        if args.is_empty() {
-                            cwd.clear();
-                        } else {
-                            let new_dir = args.join("\\");
-                            // Check if it contains a share separator
-                            if new_dir.contains('$')
-                                || new_dir.contains('/')
-                                || new_dir.contains('\\')
-                            {
-                                let sep = if new_dir.contains('/') { '/' } else { '\\' };
-                                let (share, path) = match new_dir.split_once(sep) {
-                                    Some((s, p)) => (s.to_string(), p.to_string()),
-                                    None => (new_dir.clone(), String::new()),
-                                };
-                                // Verify directory exists
-                                match smb.list_directory(&share, &path).await {
-                                    Ok(_) => {
-                                        current_share = share;
-                                        cwd = path;
-                                    }
-                                    Err(e) => println!("{} cd failed: {}", "[-]".red(), e),
-                                }
-                            } else {
-                                // Relative path in current share
-                                let test_path = if cwd.is_empty() {
-                                    new_dir.clone()
-                                } else {
-                                    format!("{}\\{}", cwd, new_dir)
-                                };
-                                match smb.list_directory(&current_share, &test_path).await {
-                                    Ok(_) => {
-                                        cwd = test_path;
-                                    }
-                                    Err(e) => println!("{} cd failed: {}", "[-]".red(), e),
-                                }
-                            }
-                        }
-                    }
-                    "get" => {
-                        if args.is_empty() {
-                            println!("{} Usage: get <remote_path>", "Error:".red());
-                            continue;
-                        }
-                        let remote_file = args[0];
-                        let (share, file_path) = match remote_file.split_once(&['/', '\\'][..]) {
-                            Some((s, p)) => (s, p),
-                            None => (current_share.as_str(), remote_file),
-                        };
-                        let full_path = if cwd.is_empty() {
-                            file_path.to_string()
-                        } else {
-                            format!("{}\\{}", cwd, file_path)
-                        };
-                        match smb.read_file(share, &full_path).await {
-                            Ok(data) => {
-                                let local_name = std::path::Path::new(file_path)
-                                    .file_name()
-                                    .unwrap_or_default()
-                                    .to_string_lossy();
-                                match std::fs::write(&*local_name, &data) {
-                                    Ok(_) => println!(
-                                        "{} Downloaded {} bytes to {}",
-                                        "[+]".green(),
-                                        data.len(),
-                                        local_name
-                                    ),
-                                    Err(e) => println!("{} Write failed: {}", "[-]".red(), e),
-                                }
-                            }
-                            Err(e) => println!("{} Get failed: {}", "[-]".red(), e),
-                        }
-                    }
-                    "put" => {
-                        if args.len() < 2 {
-                            println!("{} Usage: put <local> <remote>", "Error:".red());
-                            continue;
-                        }
-                        let local_file = args[0];
-                        let remote_file = args[1];
-                        let data = match std::fs::read(local_file) {
-                            Ok(d) => d,
-                            Err(e) => {
-                                println!("{} Cannot read {}: {}", "[-]".red(), local_file, e);
-                                continue;
-                            }
-                        };
-                        let (share, file_path) = match remote_file.split_once(&['/', '\\'][..]) {
-                            Some((s, p)) => (s, p),
-                            None => (current_share.as_str(), remote_file),
-                        };
-                        let full_path = if cwd.is_empty() {
-                            file_path.to_string()
-                        } else {
-                            format!("{}\\{}", cwd, file_path)
-                        };
-                        match smb.write_file(share, &full_path, &data).await {
-                            Ok(_) => println!(
-                                "{} Uploaded {} bytes to \\\\{}\\{}\\{}",
-                                "[+]".green(),
-                                data.len(),
-                                target,
-                                share,
-                                full_path
-                            ),
-                            Err(e) => println!("{} Put failed: {}", "[-]".red(), e),
-                        }
-                    }
-                    "rm" => {
-                        if args.is_empty() {
-                            println!("{} Usage: rm <remote_path>", "Error:".red());
-                            continue;
-                        }
-                        let remote_file = args[0];
-                        let (share, file_path) = match remote_file.split_once(&['/', '\\'][..]) {
-                            Some((s, p)) => (s, p),
-                            None => (current_share.as_str(), remote_file),
-                        };
-                        let full_path = if cwd.is_empty() {
-                            file_path.to_string()
-                        } else {
-                            format!("{}\\{}", cwd, file_path)
-                        };
-                        match smb.delete_file(share, &full_path).await {
-                            Ok(_) => println!(
-                                "{} Deleted \\\\{}\\{}\\{}",
-                                "[+]".green(),
-                                target,
-                                share,
-                                full_path
-                            ),
-                            Err(e) => println!("{} Delete failed: {}", "[-]".red(), e),
-                        }
-                    }
-                    "mkdir" => {
-                        if args.is_empty() {
-                            println!("{} Usage: mkdir <remote_path>", "Error:".red());
-                            continue;
-                        }
-                        let dir_path = args[0];
-                        let (share, dpath) = match dir_path.split_once(&['/', '\\'][..]) {
-                            Some((s, p)) => (s, p),
-                            None => (current_share.as_str(), dir_path),
-                        };
-                        let full_path = if cwd.is_empty() {
-                            dpath.to_string()
-                        } else {
-                            format!("{}\\{}", cwd, dpath)
-                        };
-                        match smb.create_dir(share, &full_path).await {
-                            Ok(_) => println!(
-                                "{} Created \\\\{}\\{}\\{}",
-                                "[+]".green(),
-                                target,
-                                share,
-                                full_path
-                            ),
-                            Err(e) => println!("{} Mkdir failed: {}", "[-]".red(), e),
-                        }
-                    }
-                    "help" => {
-                        println!(" Commands:");
-                        println!("  ls [path]        List directory contents");
-                        println!("  cd <dir>         Change directory");
-                        println!("  pwd              Print working directory (UNC)");
-                        println!("  get <remote>     Download file");
-                        println!("  put <local> <remote>  Upload file");
-                        println!("  rm <path>        Delete file");
-                        println!("  mkdir <path>     Create directory");
-                        println!("  shares           List available shares");
-                        println!("  exit/quit        Exit SMB shell");
-                        println!("  help             Show this help");
-                    }
-                    _ => {
-                        println!(
-                            "{} Unknown command: {}. Type 'help' for commands.",
-                            "Error:".red(),
-                            cmd
-                        );
-                    }
+                    println!();
+                    banner::print_info(
+                        "Impacket reference: KDF_CounterMode(exported_session_key, \"SMBSigningKey\x00\", preauth_hash, 128)",
+                    );
+                }
+                None => {
+                    banner::print_fail(
+                        "No pure-Rust SMB2 session on this platform -- signing diagnostics need the built-in client",
+                    );
+                    return 1;
                 }
             }
             return 0;

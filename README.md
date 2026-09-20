@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.4.7-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.4.8-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -73,7 +73,7 @@ This is not a scanner. This is not a "run Mimikatz but in Rust" tool. This is no
 
 > **⚠️ Deprecation notice:** The `ovt auto-pwn` command from earlier betas has been **removed** and replaced by `ovt wizard`. If your muscle memory still types `auto-pwn`, don't worry - your fingers will adapt. The wizard is what auto-pwn always wanted to be when it grew up: interactive, resumable, Q-learning-optimized, and with per-stage pause/approve so you don't accidentally DCSync during a demo.
 
-\*The binary is statically linked with ~35 Rust crates (Tokio, ldap3, kerberos\_asn1, etc.) - no Python, no .NET, no JVM. On Linux you need `smbclient` for some legacy SMB paths; most features use the built-in pure-Rust SMB2 client.
+\*The binary is statically linked with ~35 Rust crates (Tokio, ldap3, kerberos\_asn1, etc.) - no Python, no .NET, no JVM. SMB file operations, the smbclient-style shell (`ovt smb shell`), RPC (`ovt rpc`, `rpcclient` command set) and remote execution all run on the built-in pure-Rust SMB2 client; the external `smbclient` binary is only used as a last-resort fallback on hosts where the built-in client cannot negotiate.
 
 ### The Kill Chain
 
@@ -710,6 +710,9 @@ ovt wizard --target "Domain Admins" --resume session.json            # Resume sa
 ovt wizard --target DA -H DC -d DOMAIN -u USER --no-pause            # Full auto (headless)
 ovt wizard --tui                                                      # TUI wizard (click-based)
 ovt shell                                                            # Interactive REPL
+ovt smb shell -t DC -s SYSVOL -d DOMAIN -u USER -p PASS              # smbclient-style shell on a share
+ovt smb shell -t DC -d DOMAIN -u USER -p PASS -c "ls; get login.ps1" # smbclient -c one-shot mode
+ovt smb sign-diag -t DC -d DOMAIN -u USER -p PASS                    # Dump SMB2 signing keys (pcap comparison)
 ovt enum all -H DC -d DOMAIN -u USER -p PASS                        # Enumerate everything
 ovt enum policy -H DC -d DOMAIN -u USER -p PASS                     # Lockout/password policy
 ovt enum laps -H DC -d DOMAIN -u USER -p PASS                       # Readable LAPS secrets
@@ -1135,9 +1138,12 @@ cargo build --release
 # Same binary, two names. Like Clark Kent and Superman but less handsome.
 ```
 
-### Post-install: smbclient
+### Post-install: smbclient (optional)
 
-Overthrone is pure Rust with one external dependency. One. We tried to make it zero but `smb-rs` v0.11 doesn't expose directory listing yet. We're not bitter about it. (We're a little bitter about it.)
+As of v0.4.8 you no longer need `smbclient` for anything: directory listing,
+file transfer, the interactive `ovt smb shell` and RPC all run on the built-in
+pure-Rust SMB2 client. Installing Samba's client is only worth it as a
+last-resort fallback for exotic servers.
 
 ```bash
 # Debian/Ubuntu/Kali
@@ -1490,7 +1496,7 @@ A: They actually work. Real HTTP clients. Real auth flows. Real session manageme
 A: 2026 called, and the network is hybrid. Overthrone has 8 Azure AD attack operations: Managed Identity Token theft, Entra Connect credential extraction, App Registration abuse, Device Code phishing, Seamless SSO detection, Golden SAML forging, PRT theft, and hybrid identity enumeration. Because these days the domain controller and the cloud tenant are the same castle, just in different zip codes. Also, we couldn't stand seeing another "Azure AD not supported" message in red team tools.
 
 **Q: SMB2 signing was broken and you fixed it? How?**
-A: The root cause was preauth_hash corruption during session setup. When the server sends the session setup leg 2 response, it signs that response using a signing key derived from `SP800_108_KDF(ExportedSessionKey, "SMBSigningKey\x00", "SmbSign\x00")`. The KDF context is a `preauth_hash` covering messages 1-5 (negotiate request/response, session setup leg 1 request/response, leg 2 request). The bug: we were appending the leg 2 response to `preauth_hash BEFORE verifying the server's signature, corrupting the KDF context for ALL subsequent operations. Moving the preauth_hash update to after verification (and then removing it entirely because the leg 2 response isn't part of signing key derivation) fixed every SMB operation on WS2025 SMB 3.1.1. If that sounded like technical jargon, just know: the packets are wearing seatbelts now and won't crash into each other anymore. 1,794 tests. Zero signing issues.
+A: Two separate problems, fixed in two releases. First (v0.4.7) the cumulative `PreauthIntegrityHashValue` was being polluted with the session-setup leg 2 *response* before signature verification, so the SMB 3.1.1 KDF context -- `SP800_108_KDF(ExportedSessionKey, "SMBSigningKey\x00", preauth_hash)` -- no longer matched the server's. That stopped the bleeding. Second (v0.4.8) came Server 2022 (build 20348) and Server 2025 announcing **AES-128-GCM** in the negotiate context while actually signing with **AES-CMAC** derived from the same pre-auth hash. We used to print a "signing quirk" warning and disable verification after three failures, which is a polite way of giving up. Now the client probes all four real combinations (preauth-hash/GMAC, preauth-hash/CMAC, SmbSign/GMAC, SmbSign/CMAC) against the first packet the server signs, pins the winner for the whole session, and uses it for outgoing frames too. If nothing validates, `ovt smb sign-diag` dumps the exported session key, the pre-auth hash and every candidate signing key so you can diff them against Impacket or Wireshark. 1,415 tests. Zero signing guesswork.
 
 **Q: ADCS dispatcher does ESC1-9 automatically? What if I only want ESC3?**
 A: `ovt forge adcs --action esc3` specifies the exact technique. Or use `--action auto` and the dispatcher tries ESC1, ESC6, and ESC9 in order, returning the first success. It supports all 9 techniques directly (ESC1/2/3/6/9 are direct exploits, ESC4/5/7/8 generate commands for LDAP/registry modification, ESC11/12/13/14/15/16 are available through `ovt adcs` subcommands). The dispatcher is 1,147 lines of pure "give me a certificate or give me death." Usually both.
@@ -1579,7 +1585,7 @@ MIT - use it, modify it, learn from it, build on it. Just don't be evil with it.
 
 <p align="center">
   <sub>Built with mass amounts of mass-produced instant coffee, mass amounts of Rust, and a personal grudge against misconfigured ACLs.</sub><br/>
-  <sub>10 crates. ~210,000 lines of Rust. 2,148 tests. Zero Python. One smbclient dependency. Minimal regrets. (Some regrets.)</sub><br/>
+  <sub>10 crates. ~210,000 lines of Rust. 2,148+ tests. Zero Python. smbclient is optional now. Minimal regrets. (Some regrets.)</sub><br/>
   <sub>Every throne falls. The question is whether you find out from a pentester or from a ransomware note.</sub><br/>
   <sub>We prefer the first option. Your insurance company does too.</sub>
 </p>

@@ -16,6 +16,9 @@ fn test_remote_file_info_file_construction() {
         path: r"\\server\share\passwords.txt".to_string(),
         is_directory: false,
         size: 1024,
+        attributes: 0x20,
+        created: None,
+        modified: None,
     };
     assert_eq!(info.name, "passwords.txt");
     assert_eq!(info.path, r"\\server\share\passwords.txt");
@@ -30,6 +33,9 @@ fn test_remote_file_info_directory_construction() {
         path: r"\\dc01\c$\Users".to_string(),
         is_directory: true,
         size: 0,
+        attributes: 0x10,
+        created: None,
+        modified: None,
     };
     assert!(info.is_directory);
     assert_eq!(info.name, "Users");
@@ -43,6 +49,9 @@ fn test_remote_file_info_large_size() {
         path: r"\\dc01\c$\Windows\NTDS\ntds.dit".to_string(),
         is_directory: false,
         size: u64::MAX,
+        attributes: 0,
+        created: None,
+        modified: None,
     };
     assert_eq!(info.size, u64::MAX);
     assert!(!info.is_directory);
@@ -55,6 +64,9 @@ fn test_remote_file_info_empty_name() {
         path: String::new(),
         is_directory: false,
         size: 0,
+        attributes: 0,
+        created: None,
+        modified: None,
     };
     assert!(info.name.is_empty());
     assert!(info.path.is_empty());

@@ -197,6 +197,21 @@ pub struct RemoteFileInfo {
     pub is_directory: bool,
     /// Size in bytes
     pub size: u64,
+    /// Raw DOS `FileAttributes` bitmask from `SMB2_FILE_DIRECTORY_INFORMATION`.
+    /// Zero for listings parsed out of an external `smbclient` invocation.
+    pub attributes: u32,
+    /// Creation time already rendered like `smbclient ls`
+    /// (`Mon Sep 20 12:00:00 2026`), or `None` when unknown.
+    pub created: Option<String>,
+    /// Last write time already rendered like `smbclient ls`, or `None`.
+    pub modified: Option<String>,
+}
+
+impl RemoteFileInfo {
+    /// The DOS attribute column used by `smbclient ls` (e.g. `D`, `A`).
+    pub fn attribute_string(&self) -> String {
+        super::smb2::attributes_to_string(self.attributes, self.is_directory)
+    }
 }
 /// Data structure used by this module.
 #[derive(Debug, Clone)]
@@ -319,6 +334,15 @@ impl SmbSession {
 
     pub fn session_key(&self) -> Option<Vec<u8>> {
         self.session_key.clone()
+    }
+
+    /// Snapshot of every input and output of the SMB 3.x signing-key
+    /// derivation, for comparing the derived key against a known-good client.
+    pub async fn signing_diagnostics(&self) -> Option<super::smb2::SigningDiagnostics> {
+        match &self.inner {
+            Some(inner) => Some(inner.lock().await.signing_diagnostics().await),
+            None => None,
+        }
     }
 
     /// Return the stored reconnection password (if any).
@@ -530,23 +554,26 @@ impl SmbSession {
 
             let dir_path = remote_path.replace('/', "\\");
             let dir_id = conn.open_directory(&dir_path).await?;
-            let entries = conn.query_directory(&dir_id).await?;
+            let entries = conn.query_directory_detailed(&dir_id).await?;
             conn.close(&dir_id).await?;
 
             let base = dir_path.trim_start_matches('\\').to_string();
             let results = entries
                 .into_iter()
-                .map(|(name, is_directory, size)| {
+                .map(|entry| {
                     let path = if base.is_empty() {
-                        name.clone()
+                        entry.name.clone()
                     } else {
-                        format!("{}\\{}", base, name)
+                        format!("{}\\{}", base, entry.name)
                     };
                     RemoteFileInfo {
-                        name,
+                        name: entry.name,
                         path,
-                        is_directory,
-                        size,
+                        is_directory: entry.is_directory,
+                        size: entry.size,
+                        attributes: entry.attributes,
+                        created: Some(super::smb2::filetime_to_string(entry.creation_time)),
+                        modified: Some(super::smb2::filetime_to_string(entry.last_write_time)),
                     }
                 })
                 .collect::<Vec<_>>();
@@ -608,6 +635,9 @@ impl SmbSession {
                 .find_map(|tok| tok.parse::<u64>().ok())
                 .unwrap_or(0);
             entries.push(RemoteFileInfo {
+                attributes: 0,
+                created: None,
+                modified: None,
                 name: name.clone(),
                 path: if smb_path.is_empty() {
                     name
@@ -746,6 +776,7 @@ impl SmbSession {
             info!("SMB: Deleted {} (PTH)", remote_path);
             return Ok(());
         }
+        // (windows) fall through to the smb crate path below
         // Standard path via smb crate
         let client = self
             .client
@@ -762,6 +793,38 @@ impl SmbSession {
             })?;
         }
         info!("SMB: Deleted {}", remote_path);
+        Ok(())
+    }
+
+    /// Remove an empty directory on the remote share.
+    pub async fn delete_dir(&self, share: &str, remote_path: &str) -> Result<()> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            OverthroneError::Smb("Delete-dir requires the pure-Rust SMB2 client".to_string())
+        })?;
+        let share_path = format!(r"\\{}\{}", self.target, share);
+        let conn = inner.lock().await;
+        let _tree_id = conn.tree_connect(&share_path).await?;
+        conn.delete_directory(&remote_path.replace('/', "\\"))
+            .await?;
+        info!("SMB: Directory removed {}", remote_path);
+        Ok(())
+    }
+
+    /// Rename or move a file/directory inside a share (SMB2 SET_INFO /
+    /// `FileRenameInformation`). Both paths are relative to the share root.
+    pub async fn rename(&self, share: &str, remote_path: &str, new_path: &str) -> Result<()> {
+        let inner = self.inner.as_ref().ok_or_else(|| {
+            OverthroneError::Smb("Rename requires the pure-Rust SMB2 client".to_string())
+        })?;
+        let share_path = format!(r"\\{}\{}", self.target, share);
+        let conn = inner.lock().await;
+        let _tree_id = conn.tree_connect(&share_path).await?;
+        conn.rename(
+            &remote_path.replace('/', "\\"),
+            &new_path.replace('/', "\\"),
+        )
+        .await?;
+        info!("SMB: Renamed {} -> {}", remote_path, new_path);
         Ok(())
     }
 
@@ -1608,6 +1671,72 @@ pub fn build_samr_close_handle(handle: &[u8]) -> Vec<u8> {
     build_rpc_request(0, &stub)
 }
 
+/// `USER_NORMAL_ACCOUNT` -- the account type `net user /add` creates.
+pub const SAMR_USER_NORMAL_ACCOUNT: u32 = 0x0000_0010;
+
+/// `SAMR_USER_ALL_ACCESS` -- the access mask needed to create then write to a user.
+pub const SAMR_USER_ALL_ACCESS: u32 = 0x000F_07FF;
+
+/// Build `SamrCreateUser2InDomain` (opnum 50).
+///
+/// This is the call `net user <name> <pass> /add /domain` and `rpcclient`'s
+/// `createdomuser` issue to allocate the account; the password is written by a
+/// follow-up `SamrSetInformationUser2` / `SamrSetPasswordForUser`.
+/// Returns `(user_handle, granted_access, rid)` on success.
+pub fn build_samr_create_user2(domain_handle: &[u8], name: &str, account_type: u32) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(domain_handle);
+    stub.extend_from_slice(&ndr_conformant_string(name));
+    stub.extend_from_slice(&account_type.to_le_bytes());
+    stub.extend_from_slice(&SAMR_USER_ALL_ACCESS.to_le_bytes());
+    // [out] pointers, in declaration order.
+    stub.extend_from_slice(&0x0002_0004u32.to_le_bytes());
+    stub.extend_from_slice(&0x0002_0008u32.to_le_bytes());
+    stub.extend_from_slice(&0x0002_000Cu32.to_le_bytes());
+    build_rpc_request(50, &stub)
+}
+
+/// Parse the `SamrCreateUser2InDomain` reply into `(user_handle, granted_access, rid)`.
+///
+/// The reply layout is the 24-byte DCE/RPC response header, a 4-byte return
+/// code, then `UserHandle` (20-byte context handle), `GrantedAccess` and
+/// `RelativeId`.
+pub fn parse_samr_create_user(resp: &[u8]) -> Option<([u8; 20], u32, u32)> {
+    let base = 24usize;
+    if resp.len() < base + 32 {
+        return None;
+    }
+    // The NDR-unique handle is a 20-byte context handle.
+    let mut handle = [0u8; 20];
+    handle.copy_from_slice(&resp[base + 4..base + 24]);
+    if handle.iter().all(|&b| b == 0) {
+        return None;
+    }
+    let granted = u32::from_le_bytes([
+        resp[base + 24],
+        resp[base + 25],
+        resp[base + 26],
+        resp[base + 27],
+    ]);
+    let rid = u32::from_le_bytes([
+        resp[base + 28],
+        resp[base + 29],
+        resp[base + 30],
+        resp[base + 31],
+    ]);
+    Some((handle, granted, rid))
+}
+
+/// Build `SamrDeleteUser` (opnum 35).
+///
+/// Deletes the account the handle refers to. `rpcclient`'s `deletedomuser`
+/// resolves the RID with `LookupNamesInDomain`, opens the user, then issues this.
+pub fn build_samr_delete_user(user_handle: &[u8]) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(user_handle);
+    build_rpc_request(35, &stub)
+}
+
 /// Build SAMR LookupIdsInDomain request (opnum 18).
 /// Converts RIDs to names -- the core of RID cycling.
 pub fn build_samr_lookup_ids(domain_handle: &[u8], rids: &[u32]) -> Vec<u8> {
@@ -2125,6 +2254,12 @@ impl SmbSession {
         self.session_key.clone()
     }
 
+    /// Snapshot of every input and output of the SMB 3.x signing-key
+    /// derivation, for comparing the derived key against a known-good client.
+    pub async fn signing_diagnostics(&self) -> Option<super::smb2::SigningDiagnostics> {
+        Some(self.inner.lock().await.signing_diagnostics().await)
+    }
+
     pub async fn connect_share(&self, share: &str) -> Result<()> {
         let share_path = format!(r"\\{}\{}", self.target, share);
         let conn = self.inner.lock().await;
@@ -2220,23 +2355,26 @@ impl SmbSession {
 
         let dir_path = remote_path.replace('/', "\\");
         let dir_id = conn.open_directory(&dir_path).await?;
-        let entries = conn.query_directory(&dir_id).await?;
+        let entries = conn.query_directory_detailed(&dir_id).await?;
         conn.close(&dir_id).await?;
 
         let base = dir_path.trim_start_matches('\\').to_string();
         let results = entries
             .into_iter()
-            .map(|(name, is_directory, size)| {
+            .map(|entry| {
                 let path = if base.is_empty() {
-                    name.clone()
+                    entry.name.clone()
                 } else {
-                    format!("{}\\{}", base, name)
+                    format!("{}\\{}", base, entry.name)
                 };
                 RemoteFileInfo {
-                    name,
+                    name: entry.name,
                     path,
-                    is_directory,
-                    size,
+                    is_directory: entry.is_directory,
+                    size: entry.size,
+                    attributes: entry.attributes,
+                    created: Some(super::smb2::filetime_to_string(entry.creation_time)),
+                    modified: Some(super::smb2::filetime_to_string(entry.last_write_time)),
                 }
             })
             .collect::<Vec<_>>();
@@ -2298,6 +2436,32 @@ impl SmbSession {
         conn.delete_file(&file_path).await?;
 
         info!("SMB: Deleted {}", remote_path);
+        Ok(())
+    }
+
+    /// Remove an empty directory on the remote share.
+    pub async fn delete_dir(&self, share: &str, remote_path: &str) -> Result<()> {
+        let share_path = format!(r"\\{}\{}", self.target, share);
+        let conn = self.inner.lock().await;
+        let _tree_id = conn.tree_connect(&share_path).await?;
+        let dir_path = remote_path.replace('/', "\\");
+        conn.delete_directory(&dir_path).await?;
+        info!("SMB: Directory removed {}", remote_path);
+        Ok(())
+    }
+
+    /// Rename or move a file/directory inside a share (SMB2 SET_INFO /
+    /// `FileRenameInformation`). Both paths are relative to the share root.
+    pub async fn rename(&self, share: &str, remote_path: &str, new_path: &str) -> Result<()> {
+        let share_path = format!(r"\\{}\{}", self.target, share);
+        let conn = self.inner.lock().await;
+        let _tree_id = conn.tree_connect(&share_path).await?;
+        conn.rename(
+            &remote_path.replace('/', "\\"),
+            &new_path.replace('/', "\\"),
+        )
+        .await?;
+        info!("SMB: Renamed {} -> {}", remote_path, new_path);
         Ok(())
     }
 
@@ -3025,6 +3189,49 @@ mod tests {
     }
 
     // -- KerberosTicket --
+
+    // -- SAMR user create/delete builders --
+
+    #[test]
+    fn samr_create_user2_encodes_opnum_and_stub() {
+        let handle = [0xAAu8; 20];
+        let req = build_samr_create_user2(&handle, "newuser", SAMR_USER_NORMAL_ACCOUNT);
+        assert_eq!(req[0], 5, "version");
+        assert_eq!(req[1], 0, "packet type: request");
+        // opnum is little-endian u16 at offset 22
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 50);
+        // The 20-byte domain handle is the first thing in the stub.
+        assert_eq!(&req[24..44], &handle[..]);
+        // AccountType follows the conformant name string.
+        assert!(req.len() > 44);
+    }
+
+    #[test]
+    fn samr_delete_user_encodes_opnum_35() {
+        let handle = [0xBBu8; 20];
+        let req = build_samr_delete_user(&handle);
+        assert_eq!(u16::from_le_bytes([req[22], req[23]]), 35);
+        assert_eq!(&req[24..44], &handle[..]);
+    }
+
+    #[test]
+    fn parse_samr_create_user_extracts_handle_and_rid() {
+        let mut resp = vec![0u8; 60];
+        resp[28..48].copy_from_slice(&[0xCD; 20]);
+        resp[48..52].copy_from_slice(&SAMR_USER_ALL_ACCESS.to_le_bytes());
+        resp[52..56].copy_from_slice(&1234u32.to_le_bytes());
+        let (handle, granted, rid) = parse_samr_create_user(&resp).expect("handle");
+        assert_eq!(handle, [0xCD; 20]);
+        assert_eq!(granted, SAMR_USER_ALL_ACCESS);
+        assert_eq!(rid, 1234);
+    }
+
+    #[test]
+    fn parse_samr_create_user_rejects_null_handle() {
+        let resp = vec![0u8; 60];
+        assert!(parse_samr_create_user(&resp).is_none());
+        assert!(parse_samr_create_user(&[0u8; 8]).is_none());
+    }
 
     #[test]
     fn test_kerberos_ticket_new() {

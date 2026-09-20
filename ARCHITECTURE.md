@@ -740,7 +740,7 @@ flowchart TD
     MAIN["main.rs<br/>7,241 lines<br/>Clap definitions"] --> DISPATCH["Match subcommand"]
 
     DISPATCH -->|"ovt wizard"| WIZARD["commands/wizard.rs → pilot::wizard()"]
-    DISPATCH -->|"ovt enum *"| ENUM["commands/enum_commands/* → reaper"]
+    DISPATCH -->|"ovt enum *"| ENUM["main.rs cmd_enum → reaper"]
     DISPATCH -->|"ovt kerberos *"| KRB["→ hunter"]
     DISPATCH -->|"ovt adcs"| ADCS["→ core::adcs"]
     DISPATCH -->|"ovt forge"| FORGE["→ forge::run_forge()"]
@@ -751,6 +751,8 @@ flowchart TD
     DISPATCH -->|"ovt config *"| CONFIG["commands/config.rs → cli_config.rs"]
     DISPATCH -->|"ovt config profile *"| PROFILE["commands/config.rs → profile system"]
     DISPATCH -->|"ovt session *"| SESSION["commands/session.rs → pilot::session"]
+    DISPATCH -->|"ovt smb *"| SMB["main.rs cmd_smb / commands/smb_shell.rs → core::proto::smb"]
+    DISPATCH -->|"ovt rpc *"| RPC["commands/rpc.rs → core::proto::smb + epm"]
     DISPATCH -->|"ovt shell"| SHELL["interactive_shell.rs"]
     DISPATCH -->|"ovt tui"| TUI["tui/runner.rs"]
     DISPATCH -->|"ovt doctor"| DOCTOR["commands/doctor.rs"]

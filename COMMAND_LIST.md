@@ -1,4 +1,4 @@
-# Overthrone v0.4.7 — Complete Command Reference
+# Overthrone v0.4.8 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2019 DCs) — `sevenkingdoms.local` (192.168.57.10)
@@ -275,11 +275,11 @@ ovt rpc lookuprids -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 # LSA domain info (domain name, SID, DNS info)
 ovt rpc lsaenumsid -t 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 
-# Create a domain user (SAMR -- advisory: suggests net user via ovt exec)
+# Create a domain user: SamrCreateUser2InDomain (opnum 50) + password write
 ovt rpc createdomuser -t 192.168.57.10 --username testuser --password 'Pass123!' \
   -d sevenkingdoms.local -u vagrant -p vagrant
 
-# Delete a domain user by RID (SAMR)
+# Delete a domain user by RID: SamrOpenUser + SamrDeleteUser (opnum 35)
 ovt rpc deletedomuser -t 192.168.57.10 --rid 0x400 -d sevenkingdoms.local -u vagrant -p vagrant
 
 # Null session enumeration
@@ -296,8 +296,8 @@ ovt rpc netshareenum -t 192.168.57.10 --null-session
 | `lookupnames` | `-t` (required), `--names` (comma-sep), `--null-session` | SAMR LookupNames -- name -> RID |
 | `lookuprids` | `-t` (required), `--rids` (comma-sep), `--null-session` | SAMR LookupIds -- RID -> name |
 | `lsaenumsid` | `-t` (required), `--null-session` | LSARPC QueryInfoPolicy -- domain SID |
-| `createdomuser` | `-t` (required), `--username`, `--password` | SAMR CreateDomainUser (advisory) |
-| `deletedomuser` | `-t` (required), `--rid` | SAMR DeleteDomainUser by RID (advisory) |
+| `createdomuser` | `-t` (required), `--username`, `--password` | SAMR `SamrCreateUser2InDomain` (opnum 50), then the initial password write |
+| `deletedomuser` | `-t` (required), `--rid` | SAMR `SamrOpenUser` + `SamrDeleteUser` (opnum 35) |
 
 ---
 
@@ -1176,15 +1176,91 @@ ovt smb get --target 192.168.57.10 --path "SYSVOL/sevenkingdoms.local/Policies/p
 # Upload a file to a share
 ovt smb put --target 192.168.57.10 --local payload.exe --remote "C$/Windows/Temp/payload.exe" \
   -d sevenkingdoms.local -u vagrant -p vagrant
+
+# List a directory with smbclient-style attributes, size and mtime
+ovt smb ls --target 192.168.57.10 --path "SYSVOL/sevenkingdoms.local" \
+  -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Create a directory / delete a file / remove a directory / rename
+ovt smb mkdir --target 192.168.57.10 --path "C$/Windows/Temp/newdir" -d DOMAIN -u USER -p PASS
+ovt smb rm    --target 192.168.57.10 --path "C$/Windows/Temp/payload.exe" -d DOMAIN -u USER -p PASS
+ovt smb shell --target 192.168.57.10 --share SYSVOL --path sevenkingdoms.local -d DOMAIN -u USER -p PASS
+
+# Pull a file back off a share and keep it locally
+ovt smb get --target 192.168.57.10 --path "SYSVOL/sevenkingdoms.local/scripts/login.ps1" \
+  -d sevenkingdoms.local -u vagrant -p vagrant
+
+# Dump the SMB2 signing key derivation for pcap comparison
+ovt smb sign-diag --target 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+ovt smb sign-diag --target 192.168.57.10 --nt-hash <NTHASH>
 ```
 
 | Subcommand | Flags | What it does |
 |---|---|---|
 | `shares` | `--target`/`-t` (required) | List SMB shares |
 | `admin` | `--targets`/`-t` (required) | Check admin access (comma-separated) |
-| `spider` | `--target`/`-t` (required), `--extensions` (default: `.kdbx,.key,.pem,.config,.ps1,.rdp`) | Spider for sensitive files |
+| `spider` | `--target`/`-t` (required), `--extensions`, `--grep`, `--regex`, `--output-dir`, `--max-depth` | Spider for sensitive files |
 | `get` | `--target`/`-t` (required), `--path`/`-P` (required) | Download file from share |
 | `put` | `--target`/`-t` (required), `--local`/`-l` (required), `--remote`/`-r` (required) | Upload file to share |
+| `ls` | `--target`/`-t` (required), `--path` (required) | Directory listing with DOS attributes, size and mtime |
+| `rm` | `--target`/`-t` (required), `--path` (required) | Delete a file |
+| `mkdir` | `--target`/`-t` (required), `--path` (required) | Create a directory |
+| `shell` | `--target`/`-t` (required), `--share`/`-s`, `--path`, `--commands`/`-c`, `--quiet`/`-q` | Interactive smbclient-compatible shell (opens **on the share**) |
+| `sign-diag` | `--target`/`-t` (required) | Print exported session key, preauth hash and every candidate SMB2 signing key |
+
+### `ovt smb shell` — smbclient-compatible shell
+
+`ovt smb shell -t <host> -s <share>` opens a shell **directly on the share**, the
+same way `smbclient //host/share -U user%pass` does. Without `-s` the first
+readable non-`IPC$` share is selected and printed.
+
+```bash
+ovt smb shell -t 192.168.57.10 -s SYSVOL -d DOMAIN -u USER -p PASS
+smb: \> use NETLOGON
+smb: \> ls *.ps1
+smb: \> ls
+smb: \> cd sevenkingdoms.local\scripts
+smb: \> lcd /tmp/loot
+smb: \> mask *.ps1
+smb: \> recurse
+smb: \> prompt
+smb: \> mget *.ps1
+smb: \> put payload.exe C$\Windows\Temp\payload.exe
+smb: \> rename old.txt new.txt
+smb: \> stat login.ps1
+smb: \> du
+smb: \> !ls -la
+smb: \> exit
+```
+
+One-shot mode mirrors `smbclient -c`:
+
+```bash
+ovt smb shell -t 192.168.57.10 -s SYSVOL -c "ls; get sevenkingdoms.local/scripts/login.ps1; exit" \
+  -d DOMAIN -u USER -p PASS -q
+```
+
+| Command | Notes |
+|---|---|
+| `ls [mask]` / `dir` / `list` | Long listing: DOS attribute column (`D`/`A` + `H`/`S`/`R`), size, mtime |
+| `cd [dir]` / `pwd` | Remote directory (`.`, `..`, `\absolute` supported) |
+| `lcd [dir]` / `lpwd` | Local directory used by `get`/`put` |
+| `get <remote> [local]` | Single-file download (wildcards route to `mget`) |
+| `put <local> [remote]` | Single-file upload (`remote` ending in `\` means "into this dir") |
+| `mget <mask>` / `mput <mask>` | Wildcard transfer, honours `recurse` + `prompt` + `mask` |
+| `more <file>` / `cat` | Print a file (hex dump if not UTF-8) |
+| `du [dir]` | Disk usage (full tree when `recurse` is on) |
+| `stat <file>` / `allinfo` | Attributes, size and timestamps |
+| `del`/`rm`, `mkdir`/`md`, `rmdir`/`rd`, `rename`/`mv` | Mutations |
+| `shares`, `use <share>`, `showconnect` | Share listing / switching / session info |
+| `recurse`, `prompt`, `mask [pattern]` | smbclient option toggles |
+| `reconnect`/`reset` | Re-establish the SMB session |
+| `!<cmd>` | Run a command in the local shell |
+| `help [cmd]`, `exit`/`quit`/`q` | Help and exit |
+
+> `tarmode` and `setmode` are accepted for compatibility but are no-ops —
+> Overthrone does not implement smbclient's tar/archive streaming or its
+> client-side mode mapping.
 
 ---
 

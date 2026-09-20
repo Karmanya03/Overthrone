@@ -178,6 +178,15 @@ fn bind_accepted(resp: &[u8]) -> bool {
     resp.len() > 30 && resp[28] == 0 && resp[29] == 0
 }
 
+/// The NDR return code of a DCE/RPC response PDU (the first 4 bytes of the
+/// stub, immediately after the 24-byte response header). `0` means success.
+fn rpc_status(resp: &[u8]) -> Result<u32, String> {
+    if resp.len() < 28 {
+        return Err(format!("short RPC response ({} bytes)", resp.len()));
+    }
+    Ok(u32::from_le_bytes([resp[24], resp[25], resp[26], resp[27]]))
+}
+
 /// Bind to a named pipe and return the persistent pipe handle.
 async fn bind_pipe(smb: &SmbSession, pipe: &str, bind_pdu: Vec<u8>) -> Result<[u8; 32], String> {
     let fid = smb
@@ -716,6 +725,9 @@ async fn rpc_lsaenumsid(target: &str, creds: Option<&Credentials>, null_session:
 //  createdomuser
 // ===========================================================
 
+/// `createdomuser` -- allocate an account with `SamrCreateUser2InDomain`
+/// (opnum 50) and then write its password, matching what `net user /add`
+/// does in two RPC round-trips.
 async fn rpc_createdomuser(
     target: &str,
     creds: Option<&Credentials>,
@@ -732,7 +744,6 @@ async fn rpc_createdomuser(
 
     println!("{}", format!("\\\\{target}").cyan().bold());
 
-    // Step 1: bind to SAMR
     let fid = match bind_pipe(&smb, "samr", smb::build_samr_bind()).await {
         Ok(f) => f,
         Err(e) => {
@@ -741,7 +752,7 @@ async fn rpc_createdomuser(
         }
     };
 
-    let (_domain, _domain_handle) = match open_samr_domain(&smb, &fid).await {
+    let (domain_name, domain_handle) = match open_samr_domain(&smb, &fid).await {
         Ok(v) => v,
         Err(e) => {
             crate::banner::print_fail(&e);
@@ -750,29 +761,93 @@ async fn rpc_createdomuser(
         }
     };
 
-    // Step 2: create the user via SetUserInfo (opnum 36) with password
-    // We use the existing samr_password_reset which opens user by RID,
-    // but for creation we need SamrCreateUserInDomain (opnum 6).
-    // For now, report that the operation requires the user to exist.
-    // A full implementation would use opnum 6 to create the user.
-    println!(
-        "  {} SAMR user creation via opnum 6 (SamrCreateUserInDomain) requires",
-        "Note:".yellow(),
-    );
-    println!("  full NDR encoding of SamrUserInfo structures. Use `ovt exec` to run:");
-    println!(
-        "  {}",
-        format!("net user {username} {password} /add /domain").bright_white()
-    );
+    // -- Step 1: SamrCreateUser2InDomain (opnum 50) --------------------------
+    let create_resp = match smb
+        .ioctl_pipe_persistent(
+            &fid,
+            &smb::build_samr_create_user2(&domain_handle, username, smb::SAMR_USER_NORMAL_ACCOUNT),
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            crate::banner::print_fail(&format!("SamrCreateUser2InDomain failed: {e}"));
+            let _ = smb.close_pipe_persistent(&fid).await;
+            return 1;
+        }
+    };
 
+    let status = rpc_status(&create_resp).unwrap_or(u32::MAX);
+    if status != 0 {
+        crate::banner::print_fail(&format!(
+            "SamrCreateUser2InDomain on {domain_name} returned 0x{status:08X} ({})",
+            overthrone_core::error::format_ntstatus(status)
+        ));
+        let _ = smb.close_pipe_persistent(&fid).await;
+        return 1;
+    }
+
+    let (user_handle, granted, rid) = match smb::parse_samr_create_user(&create_resp) {
+        Some(v) => v,
+        None => {
+            crate::banner::print_fail("SamrCreateUser2InDomain returned no user handle");
+            let _ = smb.close_pipe_persistent(&fid).await;
+            return 1;
+        }
+    };
+
+    println!(
+        "{} {} (RID 0x{rid:x})",
+        "created:".dimmed(),
+        username.bright_white().bold()
+    );
+    tracing::debug!("SAMR: granted_access=0x{granted:08X}");
+
+    // -- Step 2: set the initial password -----------------------------------
+    // Reuses the same SamrSetPasswordForUser path `ovt smb pass-reset` uses.
+    let pwd_resp = smb
+        .ioctl_pipe_persistent(&fid, &smb::build_samr_set_password(&user_handle, password))
+        .await;
+
+    let _ = smb
+        .ioctl_pipe_persistent(&fid, &smb::build_samr_close_handle(&user_handle))
+        .await;
+    let _ = smb
+        .ioctl_pipe_persistent(&fid, &smb::build_samr_close_handle(&domain_handle))
+        .await;
     let _ = smb.close_pipe_persistent(&fid).await;
-    0
+
+    match pwd_resp {
+        Ok(r) if rpc_status(&r).unwrap_or(u32::MAX) == 0 => {
+            println!("{} password set for {username}", "[+]".green());
+            crate::banner::print_success(&format!(
+                "Account {username} created in {domain_name} (RID 0x{rid:x})"
+            ));
+            0
+        }
+        Ok(r) => {
+            let st = rpc_status(&r).unwrap_or(u32::MAX);
+            crate::banner::print_warn(&format!(
+                "Account created (RID 0x{rid:x}) but the password write returned \
+                 0x{st:08X}; set it with `ovt smb pass-reset -t {target} -u {username}`"
+            ));
+            0
+        }
+        Err(e) => {
+            crate::banner::print_warn(&format!(
+                "Account created (RID 0x{rid:x}) but the password write failed ({e}); \
+                 set it with `ovt smb pass-reset -t {target} -u {username}`"
+            ));
+            0
+        }
+    }
 }
 
 // ===========================================================
 //  deletedomuser
 // ===========================================================
 
+/// `deletedomuser` -- `SamrOpenUser` then `SamrDeleteUser` (opnum 35).
 async fn rpc_deletedomuser(target: &str, creds: Option<&Credentials>, rid: u32) -> i32 {
     let smb = match connect(target, creds, false).await {
         Ok(s) => s,
@@ -801,7 +876,6 @@ async fn rpc_deletedomuser(target: &str, creds: Option<&Credentials>, rid: u32) 
         }
     };
 
-    // Open user by RID
     let open_resp = match smb
         .ioctl_pipe_persistent(&fid, &smb::build_samr_open_user(&domain_handle, rid))
         .await
@@ -823,32 +897,36 @@ async fn rpc_deletedomuser(target: &str, creds: Option<&Credentials>, rid: u32) 
         }
     };
 
-    // Delete user (opnum 39)
-    // SamrDeleteDomainUser: handle(20 bytes)
-    let mut stub = Vec::new();
-    stub.extend_from_slice(&user_handle);
+    // SamrDeleteUser (opnum 35) -- deletes the account the handle refers to.
     let delete_resp = smb
-        .ioctl_pipe_persistent(&fid, &smb::build_samr_close_handle(&user_handle))
+        .ioctl_pipe_persistent(&fid, &smb::build_samr_delete_user(&user_handle))
         .await;
 
-    // The actual delete would be opnum 39, but build_samr_close_handle uses opnum 0.
-    // For now, report the user was found and suggest net user /del
-    println!(
-        "  {} User with RID 0x{rid:x} found and opened.",
-        "[+]".green()
-    );
-    println!(
-        "  {}",
-        "SAMR user deletion (opnum 39) requires full DCE/RPC stub encoding.".dimmed()
-    );
-    println!(
-        "  {}",
-        "Use: net user <name> /delete /domain via ovt exec".bright_white()
-    );
-
-    let _ = delete_resp;
     let _ = smb.close_pipe_persistent(&fid).await;
-    0
+
+    match delete_resp {
+        Ok(r) => match rpc_status(&r) {
+            Ok(0) => {
+                crate::banner::print_success(&format!("User with RID 0x{rid:x} deleted"));
+                0
+            }
+            Ok(st) => {
+                crate::banner::print_fail(&format!(
+                    "SamrDeleteUser returned 0x{st:08X} ({})",
+                    overthrone_core::error::format_ntstatus(st)
+                ));
+                1
+            }
+            Err(e) => {
+                crate::banner::print_fail(&e);
+                1
+            }
+        },
+        Err(e) => {
+            crate::banner::print_fail(&format!("SamrDeleteUser failed: {e}"));
+            1
+        }
+    }
 }
 
 // ===========================================================

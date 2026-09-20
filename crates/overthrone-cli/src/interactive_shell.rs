@@ -2322,7 +2322,7 @@ impl InteractiveSession {
         if args.is_empty() {
             println!("{} Usage: smb <action> [args]", "Error:".red());
             println!(" Actions: shares, admin, spider, get <remote>, put <local> <remote>,");
-            println!("          ls <path>, rm <path>, mkdir <path>, shell");
+            println!("          ls <path>, rm <path>, mkdir <path>, shell [share]");
             return Ok(());
         }
 
@@ -2378,10 +2378,24 @@ impl InteractiveSession {
         let rest = &args[1..];
 
         if action == "shell" {
+            // Drop the REPL into the same smbclient-compatible shell that
+            // `ovt smb shell` uses, reusing the session already established
+            // from the interactive context.
+            let Some(session) = smb else {
+                return Ok(());
+            };
+            let requested = rest.first().copied();
+            let chosen =
+                crate::commands::smb_shell::SmbShell::choose_share(&session, requested).await;
+            let tgt = target.unwrap_or("?").to_string();
             println!(
-                "{} Use 'ovt smb shell --target <host>' for full interactive mode",
+                "{} Entering smbclient shell on \\\\{tgt}\\{chosen} (type 'help', 'exit' to return)",
                 ">".bright_black()
             );
+            let mut shell = crate::commands::smb_shell::SmbShell::new(session, &tgt, &chosen, "");
+            if let Err(e) = shell.run().await {
+                println!("{} SMB shell: {e}", "[-]".red());
+            }
             return Ok(());
         }
 

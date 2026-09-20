@@ -51,6 +51,7 @@ pub use netlogon::{
     zerologon_probe,
 };
 pub use pkinit::{CertificateGenerator, PkinitAuthenticator, PkinitConfig, PkinitResult};
+pub use smb2::{SigningDiagnostics, SigningVariant};
 pub use targeted_kerberoast::{
     TargetedKerberoastConfig, TargetedKerberoastError, TargetedKerberoastResult,
     check_write_spn_permission, format_hashcat_kerberoast, targeted_kerberoast,

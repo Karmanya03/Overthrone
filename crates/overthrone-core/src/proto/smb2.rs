@@ -176,6 +176,9 @@ const DELETE_ACCESS: u32 = 0x0001_0000;
 const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
 const FILE_SHARE_READ: u32 = 0x0000_0001;
 const FILE_SHARE_WRITE: u32 = 0x0000_0002;
+const FILE_SHARE_DELETE: u32 = 0x0000_0004;
+// Create option used to delete a directory (MS-SMB2 §3.3.5.9).
+const FILE_DELETE_ON_CLOSE: u32 = 0x0000_1000;
 const FILE_NON_DIRECTORY_FILE: u32 = 0x0000_0040;
 const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
 const FILE_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
@@ -191,6 +194,30 @@ const FILE_SUPERSEDE: u32 = 0x0000_0000;
 
 // IOCTL
 const FSCTL_PIPE_TRANSCEIVE: u32 = 0x0011_C017;
+
+// SET_INFO FileInformationClass values (MS-SMB2 §2.2.39 / MS-FSCC §2.4)
+const FILE_RENAME_INFORMATION_CLASS: u8 = 10;
+
+/// Serialise `FILE_RENAME_INFORMATION` (MS-FSCC §2.4.34).
+///
+/// `ReplaceIfExists` is a single byte followed by 7 reserved bytes, then the
+/// 8-byte RootDirectory (0 = relative to the share), the file name length and
+/// finally the UTF-16LE file name.
+fn build_file_rename_information(new_path: &str, replace_if_exists: bool) -> Vec<u8> {
+    let name: Vec<u8> = new_path
+        .replace('/', "\\")
+        .trim_start_matches('\\')
+        .encode_utf16()
+        .flat_map(|c| c.to_le_bytes())
+        .collect();
+    let mut buf = Vec::with_capacity(20 + name.len());
+    buf.push(u8::from(replace_if_exists));
+    buf.extend_from_slice(&[0u8; 7]); // Reserved
+    buf.extend_from_slice(&0u64.to_le_bytes()); // RootDirectory = share root
+    buf.extend_from_slice(&(name.len() as u32).to_le_bytes());
+    buf.extend_from_slice(&name);
+    buf
+}
 
 // Query directory
 const FILE_DIRECTORY_INFORMATION: u8 = 1;
@@ -314,6 +341,103 @@ impl Smb3Cipher {
 }
 
 // ===========================================================
+//  SMB2 Signing Variants
+// ===========================================================
+
+/// The concrete (KDF context, signature algorithm) pair a session uses.
+///
+/// MS-SMB2 §3.1.4.1 binds both to the negotiated cipher:
+///
+/// * SMB 3.1.1 -- KDF context is the 64-byte `PreauthIntegrityHashValue` and the
+///   signature is AES-GMAC when the cipher is AES-128-GCM, AES-CMAC otherwise.
+/// * SMB 3.0/3.0.2 -- KDF context is the ASCII string `SmbSign\0` and the
+///   signature is always AES-CMAC.
+///
+/// Real servers do not always agree with that table. Windows Server 2022
+/// (build 20348) and Windows Server 2025 have both been observed announcing
+/// AES-128-GCM in the `SMB2_ENCRYPTION_CAPABILITIES` negotiate context while
+/// signing with AES-CMAC derived from the pre-auth hash -- which is why a
+/// naive implementation sees "signature mismatch" on the very first signed
+/// packet and then gives up. Rather than guessing, the connection probes the
+/// first server packet against every candidate below and pins the winner for
+/// the rest of the session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SigningVariant {
+    /// SMB 3.1.1 -- KDF context = `PreauthIntegrityHashValue`, signature = AES-CMAC.
+    CmacPreauth,
+    /// SMB 3.1.1 -- KDF context = `PreauthIntegrityHashValue`, signature = AES-GMAC.
+    GmacPreauth,
+    /// SMB 3.0.x -- KDF context = `SmbSign\0`, signature = AES-CMAC.
+    CmacSmbSign,
+    /// Probe-only legacy combination -- KDF context = `SmbSign\0`, signature = AES-GMAC.
+    GmacSmbSign,
+}
+
+impl SigningVariant {
+    /// All candidates, in the order they are probed.
+    pub const ALL: [SigningVariant; 4] = [
+        SigningVariant::CmacPreauth,
+        SigningVariant::GmacPreauth,
+        SigningVariant::CmacSmbSign,
+        SigningVariant::GmacSmbSign,
+    ];
+
+    /// Whether the SMB 3.1.1 pre-auth integrity hash is used as the KDF context.
+    pub fn uses_preauth(self) -> bool {
+        matches!(
+            self,
+            SigningVariant::CmacPreauth | SigningVariant::GmacPreauth
+        )
+    }
+
+    /// Whether packet signatures use AES-GMAC instead of AES-128-CMAC.
+    pub fn uses_gmac(self) -> bool {
+        matches!(
+            self,
+            SigningVariant::GmacPreauth | SigningVariant::GmacSmbSign
+        )
+    }
+
+    /// Human-readable label used in diagnostics.
+    pub fn name(self) -> &'static str {
+        match self {
+            SigningVariant::CmacPreauth => "AES-CMAC + preauth-hash context",
+            SigningVariant::GmacPreauth => "AES-GMAC + preauth-hash context",
+            SigningVariant::CmacSmbSign => "AES-CMAC + SmbSign context",
+            SigningVariant::GmacSmbSign => "AES-GMAC + SmbSign context",
+        }
+    }
+}
+
+/// Snapshot of every input and output of the SMB 3.x signing-key derivation.
+///
+/// This exists so the signing key can be compared byte-for-byte against a
+/// capture of a known-good client (Impacket / `netexec`) or against
+/// `Wireshark`'s SMB2 dissector, which is the only reliable way to localise a
+/// KDF mismatch on a build the client cannot reproduce.
+#[derive(Debug, Clone)]
+pub struct SigningDiagnostics {
+    /// Negotiated dialect, e.g. `0x0311`.
+    pub dialect: u16,
+    /// Negotiated SMB3 cipher id (`0x0001` CCM, `0x0002` GCM).
+    pub cipher_id: u16,
+    /// Cipher name as printed on the wire (AES-128-CCM / AES-128-GCM).
+    pub cipher: &'static str,
+    /// Whether the server requires packet signing.
+    pub signing_required: bool,
+    /// NTLM `ExportedSessionKey` -- the KDF key derivation key.
+    pub exported_session_key: Vec<u8>,
+    /// The 64-byte cumulative `PreauthIntegrityHashValue`.
+    pub preauth_hash: Option<Vec<u8>>,
+    /// The variant currently pinned for this session (if any).
+    pub detected_variant: Option<SigningVariant>,
+    /// The variant the cipher alone predicts.
+    pub expected_variant: SigningVariant,
+    /// Every candidate signing key, in [`SigningVariant::ALL`] order.
+    pub candidate_keys: Vec<(SigningVariant, [u8; 16])>,
+}
+
+// ===========================================================
 //  SMB2 Connection -- TCP Transport
 // ===========================================================
 
@@ -346,6 +470,10 @@ pub struct Smb2Connection {
     /// Number of consecutive signing verification failures.
     /// After SIGNING_FAILURE_THRESHOLD failures, signing is disabled for the session.
     signing_failures: std::sync::atomic::AtomicU32,
+    /// The (KDF context, signature algorithm) combination this session actually
+    /// uses. `None` until the first server packet is validated, after which the
+    /// winning combination is pinned for the lifetime of the connection.
+    signing_variant: Mutex<Option<SigningVariant>>,
     /// Selected cipher ID from the NEGOTIATE response (0x0001 = AES-128-CCM,
     /// 0x0002 = AES-128-GCM). Only meaningful for SMB 3.1.1 -- earlier dialects
     /// have no cipher negotiation and always use AES-128-CCM.
@@ -415,6 +543,7 @@ impl Smb2Connection {
             // Initialize to 64 zero bytes for SMB 3.1.1 cumulative pre-auth integrity hash
             preauth_hash: Mutex::new(Some(vec![0u8; 64])),
             signing_failures: std::sync::atomic::AtomicU32::new(0),
+            signing_variant: Mutex::new(None),
             // 0 = not negotiated yet; see `negotiated_cipher`.
             cipher_id: AtomicU16::new(0),
         })
@@ -529,54 +658,51 @@ impl Smb2Connection {
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
-            let gmac = self.uses_gmac_signing(dialect);
-            if !Self::verify_packet(&buf, key, dialect, true, preauth.as_deref(), gmac) {
-                // Diagnostic: try all 4 signing combinations to find what the
-                // server actually uses. Windows SMB 3.1.1 with AES-128-GCM may
-                // use CMAC (not GMAC) or a different KDF context.
-                let verify = |sk: &[u8], use_gmac: bool| -> bool {
-                    let mut vbuf = buf.clone();
-                    let sig_off = 48;
-                    if vbuf.len() < sig_off + 16 {
-                        return false;
-                    }
-                    let saved: [u8; 16] = vbuf[sig_off..sig_off + 16].try_into().unwrap_or([0; 16]);
-                    vbuf[sig_off..sig_off + 16].fill(0);
-                    let expected = if use_gmac {
-                        aes_gmac(sk, &Self::gmac_nonce(&vbuf), &vbuf)
-                    } else {
-                        Ok(aes_cmac_16(sk, &vbuf))
-                    };
-                    expected.map(|e| e[..] == saved[..]).unwrap_or(false)
-                };
-                // Key combinations: (preauth_hash or SmbSign context) x (CMAC or GMAC)
-                let sk_preauth = derive_signing_key(key, dialect, preauth.as_deref());
-                let sk_smbsign = derive_signing_key(key, dialect, None);
-                let try_cm_pre = verify(&sk_preauth, false);
-                let try_gm_pre = verify(&sk_preauth, true);
-                let try_cm_sign = verify(&sk_smbsign, false);
-                let try_gm_sign = verify(&sk_smbsign, true);
-                warn!(
-                    "SMB2: SIGN-DIAG CMAC+preauth={} GMAC+preauth={} CMAC+SmbSign={} GMAC+SmbSign={}",
-                    try_cm_pre, try_gm_pre, try_cm_sign, try_gm_sign
-                );
-                let failures = self
-                    .signing_failures
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                    + 1;
-                if failures >= SIGNING_FAILURE_THRESHOLD {
-                    warn!(
-                        "SMB2: {} consecutive signing failures -- disabling signature \
-                           verification for this session (dialect=0x{:04X}, cipher={}).",
-                        failures,
+            let variant = self.signing_variant(dialect).await;
+            if !Self::verify_with_variant(&buf, key, dialect, preauth.as_deref(), variant) {
+                // The pinned (or predicted) combination did not validate. Probe
+                // every other candidate against this exact packet before treating
+                // it as a failure: Windows Server 2022 build 20348 and Server 2025
+                // both announce AES-128-GCM yet sign with AES-CMAC, so the cipher
+                // alone is not a reliable predictor.
+                let winner = SigningVariant::ALL.into_iter().find(|&cand| {
+                    cand != variant
+                        && Self::verify_with_variant(&buf, key, dialect, preauth.as_deref(), cand)
+                });
+
+                if let Some(found) = winner {
+                    *self.signing_variant.lock().await = Some(found);
+                    self.signing_failures
+                        .store(0, std::sync::atomic::Ordering::Relaxed);
+                    debug!(
+                        "SMB2: signing algorithm auto-detected as {} (dialect=0x{:04X}, \
+                         cipher={}); pinned for this session",
+                        found.name(),
                         dialect,
                         self.negotiated_cipher().name()
                     );
                 } else {
-                    warn!(
-                        "SMB2: Signing verification failed ({}/{}), continuing",
-                        failures, SIGNING_FAILURE_THRESHOLD
-                    );
+                    let failures = self
+                        .signing_failures
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        + 1;
+                    if failures >= SIGNING_FAILURE_THRESHOLD {
+                        warn!(
+                            "SMB2: {} consecutive signing failures -- no candidate variant \
+                             validates. Disabling signature verification for this session \
+                             (dialect=0x{:04X}, cipher={}). Run `ovt smb sign-diag` and compare \
+                             the derived keys against a known-good client.",
+                            failures,
+                            dialect,
+                            self.negotiated_cipher().name()
+                        );
+                    } else {
+                        warn!(
+                            "SMB2: Signing verification failed with every candidate variant \
+                             ({}/{}), continuing",
+                            failures, SIGNING_FAILURE_THRESHOLD
+                        );
+                    }
                 }
             }
         }
@@ -609,15 +735,94 @@ impl Smb2Connection {
         }
     }
 
-    /// Whether packet signatures for this dialect use AES-GMAC rather than AES-CMAC.
+    /// The signing variant that MS-SMB2 §3.1.4.1 predicts for this connection.
     ///
-    /// Per MS-SMB2 §3.1.4.1 the SMB 3.1.1 signing algorithm is bound to the
-    /// negotiated cipher: AES-128-GMAC when the cipher is AES-128-GCM (or
-    /// AES-256-GCM), AES-128-CMAC otherwise. Signing a GCM session with CMAC (or
-    /// vice versa) produces a signature the peer rejects, which shows up as
-    /// STATUS_ACCESS_DENIED on the next request.
-    fn uses_gmac_signing(&self, dialect: u16) -> bool {
-        dialect >= SMB2_DIALECT_311 && self.negotiated_cipher() == Smb3Cipher::Aes128Gcm
+    /// SMB 3.1.1 with AES-128-GCM uses AES-GMAC over the pre-auth hash; every
+    /// other SMB 3.x combination uses AES-CMAC (with `SmbSign\0` as the KDF
+    /// context for 3.0/3.0.2). This is only the *prediction* -- use
+    /// [`Self::signing_variant`] to obtain the variant that has actually been
+    /// validated against the peer.
+    fn predicted_signing_variant(&self, dialect: u16) -> SigningVariant {
+        if dialect >= SMB2_DIALECT_311 {
+            if self.negotiated_cipher() == Smb3Cipher::Aes128Gcm {
+                SigningVariant::GmacPreauth
+            } else {
+                SigningVariant::CmacPreauth
+            }
+        } else {
+            SigningVariant::CmacSmbSign
+        }
+    }
+
+    /// The variant in force for this session.
+    ///
+    /// Returns the pinned variant once a server packet has been validated, and
+    /// the cipher-predicted variant before that.
+    async fn signing_variant(&self, dialect: u16) -> SigningVariant {
+        if let Some(v) = *self.signing_variant.lock().await {
+            return v;
+        }
+        self.predicted_signing_variant(dialect)
+    }
+
+    /// Build the `(preauth_context, gmac)` pair for a variant -- the two inputs
+    /// [`Self::compute_signature`] needs beyond the packet and session key.
+    fn variant_params(variant: SigningVariant, preauth: Option<&[u8]>) -> (Option<&[u8]>, bool) {
+        if variant.uses_preauth() {
+            (preauth, variant.uses_gmac())
+        } else {
+            (None, variant.uses_gmac())
+        }
+    }
+
+    /// Check a received packet against one specific signing variant.
+    fn verify_with_variant(
+        pkt: &[u8],
+        session_key: &[u8],
+        dialect: u16,
+        preauth: Option<&[u8]>,
+        variant: SigningVariant,
+    ) -> bool {
+        let (ctx, gmac) = Self::variant_params(variant, preauth);
+        Self::verify_packet(pkt, session_key, dialect, true, ctx, gmac)
+    }
+
+    /// Snapshot every input and output of the SMB 3.x signing-key derivation.
+    ///
+    /// Compare [`SigningDiagnostics::candidate_keys`] against the signing key a
+    /// known-good client derives for the same session (Impacket's
+    /// `--debug` output, or the SMB2 dissector on a pcap) to tell a KDF-context
+    /// mismatch apart from an exported-session-key mismatch.
+    pub async fn signing_diagnostics(&self) -> SigningDiagnostics {
+        let dialect = self.dialect.load(Ordering::Relaxed);
+        let session_key = self.session_key.lock().await.clone().unwrap_or_default();
+        let preauth = self.preauth_hash.lock().await.clone();
+        let cipher_id = self.cipher_id.load(Ordering::Relaxed);
+        let variant = self.predicted_signing_variant(dialect);
+
+        let candidate_keys = if session_key.is_empty() || dialect < SMB2_DIALECT_300 {
+            Vec::new()
+        } else {
+            SigningVariant::ALL
+                .iter()
+                .map(|&v| {
+                    let (ctx, _) = Self::variant_params(v, preauth.as_deref());
+                    (v, derive_signing_key(&session_key, dialect, ctx))
+                })
+                .collect()
+        };
+
+        SigningDiagnostics {
+            dialect,
+            cipher_id,
+            cipher: self.negotiated_cipher().name(),
+            signing_required: self.sign_required.load(Ordering::Relaxed),
+            exported_session_key: session_key,
+            preauth_hash: preauth,
+            detected_variant: *self.signing_variant.lock().await,
+            expected_variant: variant,
+            candidate_keys,
+        }
     }
 
     /// Compute the AES-GMAC nonce for packet signing (MS-SMB2 §3.1.4.1.1).
@@ -655,8 +860,9 @@ impl Smb2Connection {
     /// Compute the 16-byte packet signature for `pkt` with its signature field
     /// already zeroed (MS-SMB2 §3.1.4.1).
     ///
-    /// `gmac` selects AES-128-GMAC over AES-128-CMAC for the SMB 3.1.1 family;
-    /// see [`Self::uses_gmac_signing`].
+    /// `gmac` selects AES-128-GMAC over AES-128-CMAC for the SMB 3.1.1 family.
+    /// Callers pick both `preauth_hash` and `gmac` from a [`SigningVariant`];
+    /// see [`Self::variant_params`].
     fn compute_signature(
         pkt: &[u8],
         session_key: &[u8],
@@ -813,8 +1019,9 @@ impl Smb2Connection {
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
-            let gmac = self.uses_gmac_signing(dialect);
-            Self::sign_packet(pkt, key, dialect, preauth.as_deref(), gmac)?;
+            let variant = self.signing_variant(dialect).await;
+            let (ctx, gmac) = Self::variant_params(variant, preauth.as_deref());
+            Self::sign_packet(pkt, key, dialect, ctx, gmac)?;
         }
         self.send(pkt).await
     }
@@ -2210,7 +2417,22 @@ impl Smb2Connection {
     // ----------------- Query Directory -----------------
 
     /// List directory entries. Returns `(name, is_directory, size)` tuples.
+    ///
+    /// Prefer [`Self::query_directory_detailed`] when the caller wants the
+    /// SMB2_FILE_DIRECTORY_INFORMATION timestamps and attributes that are on the
+    /// wire anyway -- this wrapper exists for the older call sites.
     pub async fn query_directory(&self, dir_id: &[u8; 32]) -> Result<Vec<(String, bool, u64)>> {
+        Ok(self
+            .query_directory_detailed(dir_id)
+            .await?
+            .into_iter()
+            .map(|e| (e.name, e.is_directory, e.size))
+            .collect())
+    }
+
+    /// List directory entries with their full `SMB2_FILE_DIRECTORY_INFORMATION`
+    /// metadata (timestamps, allocation size and attributes).
+    pub async fn query_directory_detailed(&self, dir_id: &[u8; 32]) -> Result<Vec<SmbDirEntry>> {
         let mut all_entries = Vec::new();
         let mut first = true;
 
@@ -2300,12 +2522,97 @@ impl Smb2Connection {
                 path,
                 DELETE_ACCESS | SYNCHRONIZE,
                 FILE_ATTRIBUTE_NORMAL,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                 FILE_OPEN,
-                FILE_NON_DIRECTORY_FILE | 0x0000_1000, // FILE_DELETE_ON_CLOSE
+                FILE_NON_DIRECTORY_FILE | FILE_DELETE_ON_CLOSE,
             )
             .await?;
         self.close(&file_id).await?;
+        Ok(())
+    }
+
+    /// Delete an (empty) directory by opening it with FILE_DELETE_ON_CLOSE.
+    ///
+    /// This is what `smbclient rmdir` issues: SMB2 has no unlink-style
+    /// directory delete, so the client opens the directory with DELETE access
+    /// and lets the server remove it when the handle closes. A non-empty
+    /// directory fails with STATUS_DIRECTORY_NOT_EMPTY.
+    pub async fn delete_directory(&self, path: &str) -> Result<()> {
+        let file_id = self
+            .create(
+                path,
+                DELETE_ACCESS | SYNCHRONIZE,
+                FILE_ATTRIBUTE_NORMAL,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                FILE_OPEN,
+                FILE_DIRECTORY_FILE | FILE_DELETE_ON_CLOSE,
+            )
+            .await?;
+        self.close(&file_id).await?;
+        Ok(())
+    }
+
+    /// Rename (or move) an existing file or directory.
+    ///
+    /// Issues `SMB2_SET_INFO` with `FileRenameInformation` (MS-SMB2 §2.2.39)
+    /// against an open handle, which is how the specification requires renames
+    /// to be performed -- there is no rename-by-path operation in SMB2.
+    /// `new_path` is relative to the share root and uses `\` separators.
+    pub async fn rename(&self, path: &str, new_path: &str) -> Result<()> {
+        let file_id = self.open_file_read(path).await?;
+        let result = self
+            .set_file_info(
+                &file_id,
+                FILE_RENAME_INFORMATION_CLASS,
+                &build_file_rename_information(new_path, true),
+            )
+            .await;
+        let _ = self.close(&file_id).await;
+        result
+    }
+
+    /// `SMB2_SET_INFO` with `InfoType = SMB2_0_INFO_FILE` (MS-SMB2 §2.2.39).
+    ///
+    /// `info_class` selects the `FileInformationClass`, e.g.
+    /// `FILE_RENAME_INFORMATION_CLASS` (10) or `FILE_DISPOSITION_INFORMATION_CLASS` (13).
+    pub async fn set_file_info(
+        &self,
+        file_id: &[u8; 32],
+        info_class: u8,
+        buffer: &[u8],
+    ) -> Result<()> {
+        let hdr = self.build_header(SMB2_SET_INFO, 1).await;
+        let mut body = Vec::with_capacity(32 + buffer.len());
+        // StructureSize = 33
+        body.extend_from_slice(&33u16.to_le_bytes());
+        // InfoType = SMB2_0_INFO_FILE (1)
+        body.push(1);
+        // FileInfoClass
+        body.push(info_class);
+        // BufferLength
+        body.extend_from_slice(&(buffer.len() as u32).to_le_bytes());
+        // BufferOffset -- immediately after the 32-byte fixed part of the request
+        body.extend_from_slice(&((SMB2_HEADER_SIZE + 32) as u16).to_le_bytes());
+        // Reserved (2 bytes)
+        body.extend_from_slice(&0u16.to_le_bytes());
+        // AdditionalInformation
+        body.extend_from_slice(&0u32.to_le_bytes());
+        // FileId (16 bytes) -- the persistent+volatile pair
+        body.extend_from_slice(&file_id[..16]);
+        // Buffer
+        body.extend_from_slice(buffer);
+
+        let mut pkt = hdr;
+        pkt.extend_from_slice(&body);
+        self.send_signed(&mut pkt).await?;
+        let resp = self.recv_verified().await?;
+        let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
+        if status != STATUS_SUCCESS {
+            return Err(OverthroneError::Smb(format!(
+                "SMB2 SET_INFO (class {info_class}) failed: 0x{status:08X} ({})",
+                ntstatus_to_name(status)
+            )));
+        }
         Ok(())
     }
 
@@ -3682,7 +3989,65 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 }
 
 /// Parse FILE_DIRECTORY_INFORMATION entries from a QueryDirectory response buffer.
-fn parse_file_directory_info(data: &[u8], results: &mut Vec<(String, bool, u64)>) {
+/// A single `SMB2_FILE_DIRECTORY_INFORMATION` entry (MS-SMB2 §2.2.35).
+///
+/// The timestamps are raw Windows FILETIME values (100 ns ticks since
+/// 1601-01-01 UTC); use [`filetime_to_string`] to render them the way
+/// `smbclient ls` does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SmbDirEntry {
+    /// File or directory name (not the full path).
+    pub name: String,
+    /// True when `FILE_ATTRIBUTE_DIRECTORY` is set.
+    pub is_directory: bool,
+    /// Logical end-of-file size in bytes.
+    pub size: u64,
+    /// Allocated size on disk in bytes.
+    pub allocation_size: u64,
+    /// Creation time (FILETIME).
+    pub creation_time: u64,
+    /// Last access time (FILETIME).
+    pub last_access_time: u64,
+    /// Last write time (FILETIME).
+    pub last_write_time: u64,
+    /// Change time (FILETIME).
+    pub change_time: u64,
+    /// Raw `FileAttributes` bitmask.
+    pub attributes: u32,
+}
+
+/// Render a Windows FILETIME as `smbclient` does (`Mon Sep 20 12:00:00 2026`).
+/// Returns `?` for values that cannot represent a real date (0 or out of range).
+pub fn filetime_to_string(filetime: u64) -> String {
+    if filetime == 0 {
+        return "?".to_string();
+    }
+    // FILETIME epoch is 1601-01-01; Unix epoch is 11644473600 seconds later.
+    const FILETIME_UNIX_DELTA_SECS: i64 = 11_644_473_600;
+    let ticks = filetime as i128;
+    let unix_secs = (ticks / 10_000_000) - FILETIME_UNIX_DELTA_SECS as i128;
+    let nanos = ((ticks % 10_000_000) * 100) as u32;
+    if !(i64::MIN as i128..=i64::MAX as i128).contains(&unix_secs) {
+        return "?".to_string();
+    }
+    match chrono::DateTime::from_timestamp(unix_secs as i64, nanos) {
+        Some(dt) => dt.format("%a %b %e %H:%M:%S %Y").to_string(),
+        None => "?".to_string(),
+    }
+}
+
+/// Render the DOS attribute column used by `smbclient ls` (`D` for a directory,
+/// `A` for an archive file) plus the hidden/system/readonly flags.
+pub fn attributes_to_string(attributes: u32, is_directory: bool) -> String {
+    let mut s = String::with_capacity(4);
+    s.push(if is_directory { 'D' } else { 'A' });
+    s.push(if attributes & 0x02 != 0 { 'H' } else { ' ' });
+    s.push(if attributes & 0x04 != 0 { 'S' } else { ' ' });
+    s.push(if attributes & 0x01 != 0 { 'R' } else { ' ' });
+    s
+}
+
+fn parse_file_directory_info(data: &[u8], results: &mut Vec<SmbDirEntry>) {
     let mut offset = 0;
 
     loop {
@@ -3690,34 +4055,22 @@ fn parse_file_directory_info(data: &[u8], results: &mut Vec<(String, bool, u64)>
             break;
         }
 
-        let next_entry = u32::from_le_bytes([
-            data[offset],
-            data[offset + 1],
-            data[offset + 2],
-            data[offset + 3],
-        ]);
-        let file_attributes = u32::from_le_bytes([
-            data[offset + 56],
-            data[offset + 57],
-            data[offset + 58],
-            data[offset + 59],
-        ]);
-        let file_name_len = u32::from_le_bytes([
-            data[offset + 60],
-            data[offset + 61],
-            data[offset + 62],
-            data[offset + 63],
-        ]) as usize;
-        let end_of_file = u64::from_le_bytes([
-            data[offset + 40],
-            data[offset + 41],
-            data[offset + 42],
-            data[offset + 43],
-            data[offset + 44],
-            data[offset + 45],
-            data[offset + 46],
-            data[offset + 47],
-        ]);
+        let le_u32 = |at: usize| -> u32 {
+            u32::from_le_bytes(data[at..at + 4].try_into().unwrap_or([0; 4]))
+        };
+        let le_u64 = |at: usize| -> u64 {
+            u64::from_le_bytes(data[at..at + 8].try_into().unwrap_or([0; 8]))
+        };
+
+        let next_entry = le_u32(offset);
+        let creation_time = le_u64(offset + 8);
+        let last_access_time = le_u64(offset + 16);
+        let last_write_time = le_u64(offset + 24);
+        let change_time = le_u64(offset + 32);
+        let end_of_file = le_u64(offset + 40);
+        let allocation_size = le_u64(offset + 48);
+        let file_attributes = le_u32(offset + 56);
+        let file_name_len = le_u32(offset + 60) as usize;
 
         let name_start = offset + 64;
         let name_end = name_start + file_name_len;
@@ -3736,7 +4089,17 @@ fn parse_file_directory_info(data: &[u8], results: &mut Vec<(String, bool, u64)>
         let is_dir = file_attributes & 0x10 != 0; // FILE_ATTRIBUTE_DIRECTORY
 
         if name != "." && name != ".." {
-            results.push((name, is_dir, end_of_file));
+            results.push(SmbDirEntry {
+                name,
+                is_directory: is_dir,
+                size: end_of_file,
+                allocation_size,
+                creation_time,
+                last_access_time,
+                last_write_time,
+                change_time,
+                attributes: file_attributes,
+            });
         }
 
         if next_entry == 0 {
@@ -3765,6 +4128,90 @@ mod tests {
             u32::from_le_bytes([type1[8], type1[9], type1[10], type1[11]]),
             NTLMSSP_NEGOTIATE
         );
+    }
+
+    // -- SMB 3.x signing variants --
+
+    #[test]
+    fn signing_variant_maps_context_and_algorithm() {
+        assert!(SigningVariant::CmacPreauth.uses_preauth());
+        assert!(!SigningVariant::CmacPreauth.uses_gmac());
+        assert!(SigningVariant::GmacPreauth.uses_preauth());
+        assert!(SigningVariant::GmacPreauth.uses_gmac());
+        assert!(!SigningVariant::CmacSmbSign.uses_preauth());
+        assert!(!SigningVariant::CmacSmbSign.uses_gmac());
+        assert!(!SigningVariant::GmacSmbSign.uses_preauth());
+        assert!(SigningVariant::GmacSmbSign.uses_gmac());
+        assert_eq!(SigningVariant::ALL.len(), 4);
+    }
+
+    #[test]
+    fn variant_params_select_the_preauth_context_only_for_311_variants() {
+        let hash = [0x11u8; 64];
+        let (ctx, gmac) = Smb2Connection::variant_params(SigningVariant::CmacPreauth, Some(&hash));
+        assert_eq!(ctx, Some(&hash[..]));
+        assert!(!gmac);
+
+        let (ctx, gmac) = Smb2Connection::variant_params(SigningVariant::GmacSmbSign, Some(&hash));
+        assert!(
+            ctx.is_none(),
+            "SmbSign variants must not use the preauth hash"
+        );
+        assert!(gmac);
+    }
+
+    /// MS-SMB2 3.1.4.1: the GMAC nonce is MessageId || high-bits, and the high
+    /// bits are only the REDIRECT flag (plus ASYNC for a CANCEL request) -- the
+    /// SIGNED bit must NOT leak in, which was the pre-0.4.7 bug.
+    #[test]
+    fn gmac_nonce_masks_the_signed_flag() {
+        let mut pkt = vec![0u8; 128];
+        // MessageId = 0x1122334455667788
+        pkt[24..32].copy_from_slice(&0x1122_3344_5566_7788u64.to_le_bytes());
+        // Flags = SERVER_TO_REDIR | SIGNED
+        pkt[16..20]
+            .copy_from_slice(&(SMB2_FLAGS_SERVER_TO_REDIR | SMB2_FLAGS_SIGNED).to_le_bytes());
+        let nonce = Smb2Connection::gmac_nonce(&pkt);
+        assert_eq!(&nonce[..8], &0x1122_3344_5566_7788u64.to_le_bytes());
+        assert_eq!(&nonce[8..], &1u32.to_le_bytes());
+    }
+
+    #[test]
+    fn gmac_nonce_sets_async_for_cancel() {
+        let mut pkt = vec![0u8; 128];
+        pkt[12..14].copy_from_slice(&SMB2_CANCEL.to_le_bytes());
+        let nonce = Smb2Connection::gmac_nonce(&pkt);
+        assert_eq!(&nonce[8..], &SMB2_FLAGS_ASYNC.to_le_bytes());
+    }
+
+    // -- Directory entry metadata --
+
+    #[test]
+    fn filetime_rendering() {
+        assert_eq!(filetime_to_string(0), "?");
+        // 2026-09-20T12:00:00Z as a FILETIME.
+        let unix = 1_789_905_600i64 + 11_644_473_600;
+        let ft = (unix as u64) * 10_000_000;
+        let rendered = filetime_to_string(ft);
+        assert!(rendered.contains("2026"), "got {rendered}");
+    }
+
+    #[test]
+    fn attribute_column_matches_smbclient_shape() {
+        assert_eq!(attributes_to_string(0x10, true), "D   ");
+        assert_eq!(attributes_to_string(0x20, false), "A   ");
+        assert_eq!(attributes_to_string(0x27, false), "AHSR");
+    }
+
+    #[test]
+    fn file_rename_information_layout() {
+        let buf = build_file_rename_information("Windows\\Temp\\a.txt", true);
+        assert_eq!(buf[0], 1); // ReplaceIfExists
+        assert!(buf[1..8].iter().all(|&b| b == 0)); // Reserved
+        assert_eq!(u64::from_le_bytes(buf[8..16].try_into().unwrap()), 0);
+        let name_len = u32::from_le_bytes(buf[16..20].try_into().unwrap()) as usize;
+        assert_eq!(name_len, "Windows\\Temp\\a.txt".encode_utf16().count() * 2);
+        assert_eq!(buf.len(), 20 + name_len);
     }
 
     #[test]
