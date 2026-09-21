@@ -291,6 +291,33 @@ fn ntstatus_to_name(code: u32) -> &'static str {
     }
 }
 
+/// `StructureSize` of an SMB2 CREATE request (MS-SMB2 §2.2.13).
+///
+/// The fixed part of the request body is 56 bytes, but the field is 57, and
+/// Windows rejects a request whose size is below it -- see [`pad_create_body`].
+const SMB2_CREATE_STRUCTURE_SIZE: u16 = 57;
+
+/// Pad an SMB2 CREATE request body so Windows accepts it.
+///
+/// MS-SMB2 §3.3.5.9: "If the size of the SMB2 CREATE Request (excluding the SMB2
+/// header) is less than specified in the StructureSize field, then the request
+/// MUST be failed with STATUS_INVALID_PARAMETER". An *empty* name -- which is how
+/// the share root is opened, and what `smbclient` sends -- leaves the body at
+/// exactly 56 bytes, so such a request was rejected outright. That is why `ls`
+/// on a share root, and therefore the first command in `smb shell`, failed with
+/// `0xC000000D`.
+///
+/// The trailing zeros are pure padding: `NameLength` and `NameOffset` are
+/// unaffected, and real clients also round the request up to 8 bytes.
+fn pad_create_body(body: &mut Vec<u8>) {
+    while body.len() < SMB2_CREATE_STRUCTURE_SIZE as usize {
+        body.push(0);
+    }
+    while !(SMB2_HEADER_SIZE + body.len()).is_multiple_of(8) {
+        body.push(0);
+    }
+}
+
 /// The `SMB2_*` command carried by a packet header, named for diagnostics.
 ///
 /// `recv_verified` reports which response failed signature verification; a
@@ -2142,7 +2169,7 @@ impl Smb2Connection {
         let hdr = self.build_header(SMB2_CREATE, 0).await;
         let mut body = Vec::new();
         // StructureSize = 57
-        body.extend_from_slice(&57u16.to_le_bytes());
+        body.extend_from_slice(&SMB2_CREATE_STRUCTURE_SIZE.to_le_bytes());
         // SecurityFlags = 0
         body.push(0);
         // RequestedOplockLevel = 0 (none)
@@ -2178,6 +2205,7 @@ impl Smb2Connection {
         }
         // File name
         body.extend_from_slice(&path_utf16);
+        pad_create_body(&mut body);
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
@@ -2187,7 +2215,13 @@ impl Smb2Connection {
         let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
         if status != STATUS_SUCCESS {
             return Err(OverthroneError::Smb(format!(
-                "SMB2 Create '{path}' failed: 0x{status:08X}"
+                "SMB2 Create '{}' failed: 0x{status:08X} ({})",
+                if path.is_empty() {
+                    "<share root>"
+                } else {
+                    path
+                },
+                ntstatus_to_name(status)
             )));
         }
 
@@ -2333,10 +2367,12 @@ impl Smb2Connection {
     }
 
     /// Open a directory for listing.
+    ///
+    /// `path` is relative to the share root and an *empty* path is the root
+    /// itself, which is what `smbclient` and the Windows redirector send.
     pub async fn open_directory(&self, path: &str) -> Result<[u8; 32]> {
-        let p = if path.is_empty() { "" } else { path };
         self.create(
-            p,
+            path,
             FILE_READ_DATA | FILE_READ_ATTRIBUTES,
             0,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
@@ -4968,6 +5004,30 @@ mod tests {
             false,
             true
         ));
+    }
+
+    /// Opening the share root sends an empty name, which leaves the request body
+    /// at 56 bytes -- one below the `StructureSize` Windows validates, so it
+    /// answered `STATUS_INVALID_PARAMETER`. Padding is what makes `ls` at a share
+    /// root (and the first command in `smb shell`) work.
+    #[test]
+    fn create_body_padding_keeps_requests_at_or_above_structure_size() {
+        // Empty name: 56 bytes of fixed fields and nothing else.
+        let mut body = vec![0u8; SMB2_CREATE_STRUCTURE_SIZE as usize - 1];
+        pad_create_body(&mut body);
+        assert!(
+            body.len() >= SMB2_CREATE_STRUCTURE_SIZE as usize,
+            "body {} is below StructureSize {}",
+            body.len(),
+            SMB2_CREATE_STRUCTURE_SIZE
+        );
+        assert_eq!((SMB2_HEADER_SIZE + body.len()) % 8, 0);
+
+        // A named path already clears StructureSize and stays 8-byte aligned.
+        let mut body = vec![0u8; 58];
+        pad_create_body(&mut body);
+        assert_eq!((SMB2_HEADER_SIZE + body.len()) % 8, 0);
+        assert_eq!(body.len(), 64);
     }
 
     #[test]

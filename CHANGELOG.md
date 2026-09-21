@@ -90,6 +90,28 @@ With enumeration working, the table carries only server-reported data:
   real types and remarks, and `ADMIN$`/`C$` correctly report no access for a
   non-administrative user -- which the host's own SMB client confirms.
 
+### SMB paths and share roots
+
+- **A bare `--path` is the share, not a path inside `C$`.** `ovt smb ls --path
+  SYSVOL` used to tree-connect to `C$` and look for a directory called `SYSVOL`,
+  so it reported whatever `C$` happened to allow (usually `ACCESS_DENIED`) and
+  never touched the share the user named. The first component of `--path` /
+  `--remote` is the share name -- what the help text always said -- and
+  `get`/`ls`/`rm`/`mkdir`/`put` now share one tested `split_share_path` helper.
+  Leading and doubled separators are accepted (`//SYSVOL/scripts`), and a value
+  with no share name is rejected with a hint instead of silently probing `C$`.
+- **`ls` works at a share root.** Opening the root sends an SMB2 CREATE with an
+  empty name, which left the request body at 56 bytes -- one below the
+  `StructureSize` Windows validates -- so Server 2022 answered
+  `STATUS_INVALID_PARAMETER` (MS-SMB2 §3.3.5.9). CREATE requests are padded now,
+  which also fixes the first command in `ovt smb shell`, since the shell opens on
+  the share root.
+- Live-verified against the Server 2022 DC: `ls --path SYSVOL` lists the root,
+  `ls --path SYSVOL/LAINOSCP.local/Policies` walks into a GPO,
+  `smb shell -s SYSVOL -c "ls; cd LAINOSCP.local; ls; pwd"` navigates and returns,
+  and `smb get --path SYSVOL/LAINOSCP.local/Policies/{...F9}/gpt.ini` downloads
+  the real 22-byte file.
+
 ### Priority-3 completeness
 
 - **Removed dead duplicate modules.** `crates/overthrone-cli/src/commands/enum_commands/`

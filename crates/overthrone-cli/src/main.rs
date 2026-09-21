@@ -2231,11 +2231,11 @@ enum SmbAction {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
-        /// Remote file path -- starts with share name, e.g. C$/Windows/Temp/file.txt
+        /// Remote file path: <share>/<path>, e.g. C$/Windows/Temp/file.txt
         #[arg(long, required = true)]
         path: String,
     },
-    /// Upload a file to an SMB share (remote format: Share$/path, e.g. C$/Windows/Temp/file.txt)
+    /// Upload a file to an SMB share (remote format: <share>/<path>, e.g. C$/Windows/Temp/file.txt)
     Put {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
@@ -2243,7 +2243,7 @@ enum SmbAction {
         /// Local file path
         #[arg(short, long, required = true)]
         local: String,
-        /// Remote file path -- starts with share name, e.g. C$/Windows/Temp/file.txt
+        /// Remote file path: <share>/<path>, e.g. C$/Windows/Temp/file.txt
         #[arg(short = 'r', long, required = true)]
         remote: String,
     },
@@ -2252,7 +2252,8 @@ enum SmbAction {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
-        /// Remote path -- e.g. C$/Users or share/relative/path
+        /// Remote path: <share>/<path>, e.g. C$/Users or SYSVOL/LAINOSCP.local.
+        /// A bare name (SYSVOL) is the share root
         #[arg(long, required = true)]
         path: String,
     },
@@ -2261,7 +2262,8 @@ enum SmbAction {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
-        /// Remote file path -- e.g. C$/Windows/Temp/file.txt
+        /// Remote file path: <share>/<path>, e.g. C$/Windows/Temp/file.txt.
+        /// A bare name (SYSVOL) is the share root
         #[arg(long, required = true)]
         path: String,
     },
@@ -2270,7 +2272,8 @@ enum SmbAction {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
-        /// Remote directory path -- e.g. C$/Windows/Temp/newdir
+        /// Remote directory path: <share>/<path>, e.g. C$/Windows/Temp/newdir.
+        /// A bare name (SYSVOL) is the share root
         #[arg(long, required = true)]
         path: String,
     },
@@ -7847,6 +7850,33 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
     0
 }
 
+/// Split a `--path` / `--remote` value into `(share, path inside the share)`.
+///
+/// The first component is the share name, which is the convention every SMB
+/// subcommand documents (`C$/Users`, `SYSVOL/LAINOSCP.local`). A bare name is
+/// therefore the *share itself*: `--path SYSVOL` lists the root of `SYSVOL`. It
+/// used to be treated as a path inside `C$`, so asking for a share
+/// tree-connected to a share the user never named and reported whatever that
+/// share happened to allow. Leading and doubled separators are ignored, so
+/// `//SYSVOL/scripts` and `\SYSVOL\scripts` mean the same as `SYSVOL/scripts`.
+///
+/// Returns `None` -- after saying why -- when there is no share name to use.
+fn split_share_path(input: &str) -> Option<(&str, &str)> {
+    let trimmed = input.trim().trim_start_matches(['/', '\\']);
+    let (share, path) = match trimmed.split_once(['/', '\\']) {
+        Some((share, path)) => (share, path.trim_start_matches(['/', '\\'])),
+        None => (trimmed, ""),
+    };
+    if share.is_empty() {
+        banner::print_fail(&format!(
+            "'{input}' has no share name -- use <share>/<path>, e.g. C$/Users/file.txt or \
+             SYSVOL/LAINOSCP.local"
+        ));
+        return None;
+    }
+    Some((share, path))
+}
+
 // cmd_smb
 async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
     banner::print_module_banner("SMB");
@@ -8203,9 +8233,8 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 }
             };
             // Parse share and path from the path string (e.g. "C$/Users/file.txt")
-            let (share, remote_path) = match path.split_once('/') {
-                Some((s, p)) => (s, p),
-                None => ("C$", path.as_str()),
+            let Some((share, remote_path)) = split_share_path(&path) else {
+                return 1;
             };
             match smb.read_file(share, remote_path).await {
                 Ok(data) => {
@@ -8243,9 +8272,8 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
-            let (share, remote_path) = match path.split_once('/') {
-                Some((s, p)) => (s, p),
-                None => ("C$", path.as_str()),
+            let Some((share, remote_path)) = split_share_path(&path) else {
+                return 1;
             };
             match smb.list_directory(share, remote_path).await {
                 Ok(entries) => {
@@ -8284,9 +8312,8 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
-            let (share, remote_path) = match path.split_once('/') {
-                Some((s, p)) => (s, p),
-                None => ("C$", path.as_str()),
+            let Some((share, remote_path)) = split_share_path(&path) else {
+                return 1;
             };
             match smb.delete_file(share, remote_path).await {
                 Ok(_) => {
@@ -8309,9 +8336,8 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
-            let (share, remote_path) = match path.split_once('/') {
-                Some((s, p)) => (s, p),
-                None => ("C$", path.as_str()),
+            let Some((share, remote_path)) = split_share_path(&path) else {
+                return 1;
             };
             match smb.create_dir(share, remote_path).await {
                 Ok(_) => {
@@ -8443,9 +8469,8 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
-            let (share, remote_path) = match remote.split_once('/') {
-                Some((s, p)) => (s, p),
-                None => ("C$", remote.as_str()),
+            let Some((share, remote_path)) = split_share_path(&remote) else {
+                return 1;
             };
             match smb.write_file(share, remote_path, &data).await {
                 Ok(_) => {
@@ -10026,6 +10051,50 @@ mod cli_parse_tests {
             .join()
             .expect("parser thread panicked")
             .unwrap_or_else(|e| panic!("clap parse failed: {e}"))
+    }
+
+    /// A bare name is the share, not a path inside `C$`: `--path SYSVOL` is the
+    /// root of the `SYSVOL` share.
+    #[test]
+    fn split_share_path_treats_a_bare_name_as_the_share() {
+        assert_eq!(split_share_path("SYSVOL"), Some(("SYSVOL", "")));
+        assert_eq!(split_share_path("C$"), Some(("C$", "")));
+        assert_eq!(split_share_path("  NETLOGON  "), Some(("NETLOGON", "")));
+        assert_eq!(split_share_path("SYSVOL/"), Some(("SYSVOL", "")));
+    }
+
+    #[test]
+    fn split_share_path_splits_the_share_from_the_path() {
+        assert_eq!(
+            split_share_path("C$/Windows/Temp/file.txt"),
+            Some(("C$", "Windows/Temp/file.txt"))
+        );
+        assert_eq!(
+            split_share_path("SYSVOL/LAINOSCP.local/Policies"),
+            Some(("SYSVOL", "LAINOSCP.local/Policies"))
+        );
+    }
+
+    /// Leading and doubled separators -- the form the old `put` help told users
+    /// was wrong -- must not produce an empty share name.
+    #[test]
+    fn split_share_path_ignores_leading_and_doubled_separators() {
+        assert_eq!(
+            split_share_path("//SYSVOL/scripts"),
+            Some(("SYSVOL", "scripts"))
+        );
+        assert_eq!(
+            split_share_path(r"\\SYSVOL\\scripts"),
+            Some(("SYSVOL", "scripts"))
+        );
+    }
+
+    #[test]
+    fn split_share_path_rejects_a_path_with_no_share_name() {
+        assert_eq!(split_share_path(""), None);
+        assert_eq!(split_share_path("   "), None);
+        assert_eq!(split_share_path("/"), None);
+        assert_eq!(split_share_path("//"), None);
     }
 
     #[test]
