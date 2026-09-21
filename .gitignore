@@ -17,7 +17,6 @@ Thumbs.db
 # Personal/Planning files (not for GitHub)
 .opencode/
 plans/
-*=
 q_table.json
 clippy*.txt
 hex_dump.txt
@@ -60,3 +59,58 @@ tools/docgen/
 # Package locks (auto-generated)
 package-lock.json
 bun.lock
+
+# Loot / engagement output (NEVER commit)
+loot/
+
+# Credential material
+*.ccache
+*.kirbi
+*.keytab
+*.pfx
+*.p12
+
+# NTDS / registry dumps
+ntds*
+*.ntds
+*.hive
+*.reg
+
+# Password / hash / user lists (generated during engagements)
+*_hashes.txt
+*_users.txt
+*_passwords.txt
+crack_wordlist.txt
+spray_*.txt
+valid_*.txt
+real_*.txt
+target_*.txt
+goad_*.txt
+all_*.txt
+common_*.txt
+
+# Test artifacts
+test_ovt.txt
+test_upload.txt
+
+# Scheduled task XML (generated during engagements)
+ScheduledTasks.xml
+GptTmpl.inf
+
+# Engagement-specific local docs
+GOAD-Light-PoC-Runbook.md
+OVT-Report.md
+REMEDIATION_PLAN.md
+TECHNIQUE_VERIFICATION.md
+
+# Config overrides (local only)
+configs/
+
+# Cert / key material generated during ops
+ca_backup_ldap.der
+ca_cert_ldap.der
+getcert.bat
+check_sql.bat
+discover.ps1
+switch-network.sh
+scripts/
