@@ -172,7 +172,6 @@ const NTLMSSP_NEGOTIATE_SIGN: u32 = 0x0000_0010;
 const NTLMSSP_REQUEST_TARGET: u32 = 0x0000_0004;
 const NTLMSSP_NEGOTIATE_UNICODE: u32 = 0x0000_0001;
 const NTLMSSP_NEGOTIATE_TARGET_INFO: u32 = 0x0080_0000;
-#[allow(dead_code)] // May be used by compute_ntlmv2_mic callers
 const NTLMSSP_NEGOTIATE_VERSION: u32 = 0x0200_0000;
 
 // File access masks
@@ -262,6 +261,31 @@ const STATUS_INVALID_DEVICE_REQUEST: u32 = 0xC000_0010;
 const STATUS_ACCESS_DENIED: u32 = 0xC000_0022;
 const STATUS_LOGON_FAILURE: u32 = 0xC000_006D;
 const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
+const STATUS_OBJECT_PATH_NOT_FOUND: u32 = 0xC000_003A;
+const STATUS_OBJECT_NAME_COLLISION: u32 = 0xC000_0035;
+const STATUS_EAS_NOT_SUPPORTED: u32 = 0xC000_004F;
+const STATUS_FILE_IS_A_DIRECTORY: u32 = 0xC000_00BA;
+const STATUS_NOT_A_DIRECTORY: u32 = 0xC000_0103;
+const STATUS_SHARING_VIOLATION: u32 = 0xC000_0043;
+const STATUS_FILE_LOCK_CONFLICT: u32 = 0xC000_0054;
+const STATUS_DELETE_PENDING: u32 = 0xC000_0055;
+const STATUS_END_OF_FILE: u32 = 0xC000_0011;
+const STATUS_DISK_FULL: u32 = 0xC000_007F;
+const STATUS_PIPE_NOT_AVAILABLE: u32 = 0xC000_00AC;
+const STATUS_PIPE_BROKEN: u32 = 0xC000_014B;
+const STATUS_BAD_NETWORK_NAME: u32 = 0xC000_00CC;
+const STATUS_NETWORK_NAME_DELETED: u32 = 0xC000_00C9;
+const STATUS_CONNECTION_DISCONNECTED: u32 = 0xC000_020C;
+const STATUS_CONNECTION_RESET: u32 = 0xC000_020D;
+const STATUS_IO_TIMEOUT: u32 = 0xC000_00B5;
+const STATUS_OBJECT_PATH_SYNTAX_BAD: u32 = 0xC000_003B;
+const STATUS_NO_SUCH_FILE: u32 = 0xC000_000F;
+const STATUS_INVALID_HANDLE: u32 = 0xC000_0008;
+const STATUS_INFO_LENGTH_MISMATCH: u32 = 0xC000_0004;
+const STATUS_INSUFFICIENT_RESOURCES: u32 = 0xC000_009A;
+const STATUS_ACCOUNT_RESTRICTION: u32 = 0xC000_006F;
+const STATUS_PASSWORD_EXPIRED: u32 = 0xC000_0071;
+const STATUS_ACCOUNT_DISABLED: u32 = 0xC000_0072;
 
 /// Number of consecutive signing failures before disabling verification for the session.
 /// Setting this to 3 prevents a single transient error from breaking the session,
@@ -279,9 +303,33 @@ fn ntstatus_to_name(code: u32) -> &'static str {
         STATUS_ACCESS_DENIED => "ACCESS_DENIED",
         STATUS_LOGON_FAILURE => "LOGON_FAILURE",
         STATUS_OBJECT_NAME_NOT_FOUND => "OBJECT_NAME_NOT_FOUND",
+        STATUS_OBJECT_PATH_NOT_FOUND => "OBJECT_PATH_NOT_FOUND",
+        STATUS_OBJECT_PATH_SYNTAX_BAD => "OBJECT_PATH_SYNTAX_BAD",
+        STATUS_OBJECT_NAME_COLLISION => "OBJECT_NAME_COLLISION",
+        STATUS_NO_SUCH_FILE => "NO_SUCH_FILE",
+        STATUS_EAS_NOT_SUPPORTED => "EAS_NOT_SUPPORTED",
+        STATUS_FILE_IS_A_DIRECTORY => "FILE_IS_A_DIRECTORY",
+        STATUS_NOT_A_DIRECTORY => "NOT_A_DIRECTORY",
+        STATUS_SHARING_VIOLATION => "SHARING_VIOLATION",
+        STATUS_FILE_LOCK_CONFLICT => "FILE_LOCK_CONFLICT",
+        STATUS_DELETE_PENDING => "DELETE_PENDING",
+        STATUS_END_OF_FILE => "END_OF_FILE",
+        STATUS_DISK_FULL => "DISK_FULL",
+        STATUS_PIPE_NOT_AVAILABLE => "PIPE_NOT_AVAILABLE",
+        STATUS_PIPE_BROKEN => "PIPE_BROKEN",
+        STATUS_BAD_NETWORK_NAME => "BAD_NETWORK_NAME",
+        STATUS_NETWORK_NAME_DELETED => "NETWORK_NAME_DELETED",
+        STATUS_CONNECTION_DISCONNECTED => "CONNECTION_DISCONNECTED",
+        STATUS_CONNECTION_RESET => "CONNECTION_RESET",
+        STATUS_IO_TIMEOUT => "IO_TIMEOUT",
+        STATUS_INVALID_HANDLE => "INVALID_HANDLE",
+        STATUS_INFO_LENGTH_MISMATCH => "INFO_LENGTH_MISMATCH",
+        STATUS_INSUFFICIENT_RESOURCES => "INSUFFICIENT_RESOURCES",
+        STATUS_ACCOUNT_RESTRICTION => "ACCOUNT_RESTRICTION",
+        STATUS_PASSWORD_EXPIRED => "PASSWORD_EXPIRED",
+        STATUS_ACCOUNT_DISABLED => "ACCOUNT_DISABLED",
         0xC000_0005 => "ACCESS_VIOLATION",
-        0xC000_0023 => "INVALID_HANDLE",
-        0xC000_0071 => "INVALID_SMB",
+        0xC000_0023 => "BUFFER_TOO_SMALL",
         0xC000_00C0 => "BUFFER_OVERFLOW",
         0xC000_010B => "INVALID_DEVICE_STATE",
         0xC000_01C3 => "USER_SESSION_DELETED",
@@ -768,9 +816,39 @@ impl Smb2Connection {
             let variant = self.signing_variant(dialect).await;
             let key = self.session_key.lock().await.clone().unwrap_or_default();
 
+            // A response carrying no SMB2_FLAGS_SIGNED is not a signature
+            // *mismatch*, and must not be counted as one: it is the peer
+            // declining to sign, which Windows does for interim responses. Two
+            // wrong things follow from treating it as a mismatch -- a KDF bug is
+            // reported where there is none, and three such responses silently
+            // disable signature verification for the whole session.
+            let flags = u32::from_le_bytes([buf[16], buf[17], buf[18], buf[19]]);
+            if flags & SMB2_FLAGS_SIGNED == 0 {
+                debug!(
+                    "SMB2: unsigned response from the peer -- {} status=0x{:08X} len={} \
+                     (signing is required, so this is noted but not treated as a key \
+                     mismatch)",
+                    packet_command(&buf),
+                    u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
+                    buf.len()
+                );
+                return Ok(buf);
+            }
+
             if !Self::verify_with_variant(&buf, &key, dialect, preauth.as_deref(), variant, false)
                 && !self.probe_and_pin_signing_variant(&buf).await
             {
+                debug!(
+                    "SMB2: unverifiable response -- command={}, status=0x{:08X}, flags=0x{:08X}, \
+                     message_id={}, len={}",
+                    packet_command(&buf),
+                    u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]),
+                    flags,
+                    u64::from_le_bytes([
+                        buf[24], buf[25], buf[26], buf[27], buf[28], buf[29], buf[30], buf[31]
+                    ]),
+                    buf.len()
+                );
                 let failures = self
                     .signing_failures
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -3161,6 +3239,57 @@ pub struct NtlmChallenge {
     pub server_challenge: [u8; 8],
     pub target_info: Vec<u8>,
     pub negotiate_flags: u32,
+    /// OS version from the `Version` field, when the server sent one.
+    pub version: Option<NtlmVersion>,
+}
+
+/// The `Version` field of an NTLM `CHALLENGE` (`major.minor.build`).
+///
+/// Windows fills this in when the client negotiated
+/// `NTLMSSP_NEGOTIATE_VERSION`, which `build_ntlmssp_negotiate` always sets, and
+/// it is where NetExec reads the `Windows Server 2022 Build 20348` part of its
+/// host line from -- the same source, since the SMB2 negotiate response carries
+/// no OS version at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NtlmVersion {
+    /// Major version (10 for every Windows since 10/Server 2016).
+    pub major: u8,
+    /// Minor version (0 for every Windows since 10).
+    pub minor: u8,
+    /// Build number -- the only field that identifies the release.
+    pub build: u16,
+}
+
+impl NtlmVersion {
+    /// Product name for the build, e.g. `Windows Server 2022`.
+    ///
+    /// Builds are mapped to the *server* name where the number is shared with a
+    /// client release (26100 is both Windows 11 24H2 and Server 2025, 19041+ is
+    /// Windows 10), because the SMB surface this is printed for is a server's.
+    pub fn product_name(&self) -> String {
+        match (self.major, self.minor, self.build) {
+            (10, 0, 26100..=26199) => "Windows Server 2025".to_string(),
+            (10, 0, 20348..=20349) => "Windows Server 2022".to_string(),
+            (10, 0, 17763) => "Windows Server 2019".to_string(),
+            (10, 0, 14393) => "Windows Server 2016".to_string(),
+            (10, 0, 22621..=22699) => "Windows 11".to_string(),
+            (10, 0, 22000..=22099) => "Windows 11".to_string(),
+            (10, 0, 19041..=19045) => "Windows 10".to_string(),
+            (10, 0, _) => "Windows 10 / Server 2016+".to_string(),
+            (6, 3, _) => "Windows 8.1 / Server 2012 R2".to_string(),
+            (6, 2, _) => "Windows 8 / Server 2012".to_string(),
+            (6, 1, _) => "Windows 7 / Server 2008 R2".to_string(),
+            (6, 0, _) => "Windows Vista / Server 2008".to_string(),
+            (5, 2, _) => "Windows Server 2003".to_string(),
+            (5, 1, _) => "Windows XP".to_string(),
+            (major, minor, build) => format!("Windows {major}.{minor} Build {build}"),
+        }
+    }
+
+    /// `Windows Server 2022 Build 20348` -- the string `nxc smb <host>` prints.
+    pub fn product_string(&self) -> String {
+        format!("{} Build {}", self.product_name(), self.build)
+    }
 }
 
 /// Identity a server discloses in the NTLM `CHALLENGE` during an
@@ -3179,6 +3308,8 @@ pub struct Smb2ServerIdentity {
     pub dns_tree_name: Option<String>,
     /// NTLM negotiate flags echoed by the server.
     pub negotiate_flags: u32,
+    /// OS `major.minor.build` from the challenge, when the server sent it.
+    pub os_version: Option<NtlmVersion>,
 }
 
 /// Decode a UTF-16LE `AV_PAIR` value into a trimmed `String`.
@@ -3272,6 +3403,7 @@ impl Smb2Connection {
             dns_domain_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_DNS_DOMAIN_NAME),
             dns_tree_name: av_utf16(&pairs, crate::proto::ntlm::MSV_AV_DNS_TREE_NAME),
             negotiate_flags: challenge.negotiate_flags,
+            os_version: challenge.version,
         })
     }
 }
@@ -3358,10 +3490,24 @@ pub fn parse_ntlmssp_challenge(data: &[u8]) -> Result<NtlmChallenge> {
         Vec::new()
     };
 
+    // Version (8 bytes at offset 48) is only present when the server accepted
+    // NTLMSSP_NEGOTIATE_VERSION; bytes are major, minor, build(2), reserved(3),
+    // revision.
+    let version = if negotiate_flags & NTLMSSP_NEGOTIATE_VERSION != 0 && data.len() >= 56 {
+        Some(NtlmVersion {
+            major: data[48],
+            minor: data[49],
+            build: u16::from_le_bytes([data[50], data[51]]),
+        })
+    } else {
+        None
+    };
+
     Ok(NtlmChallenge {
         server_challenge,
         target_info,
         negotiate_flags,
+        version,
     })
 }
 
@@ -5204,5 +5350,84 @@ mod tests {
         resp[64 + 36..64 + 40].copy_from_slice(&100u32.to_le_bytes()); // out_count=100 but only 56+0 bytes
         let result = Smb2Connection::parse_ioctl_output(&resp);
         assert!(result.is_err());
+    }
+
+    /// Minimal NTLMSSP Type 2 (Challenge) with real field offsets:
+    /// signature 0-7, type 8-11, target name 12-19, flags 20-23, challenge
+    /// 24-31, reserved 32-39, target info 40-47, Version 48-55.
+    fn build_challenge(flags: u32, version: Option<[u8; 8]>) -> Vec<u8> {
+        let mut msg = vec![0u8; 48];
+        msg[0..8].copy_from_slice(NTLMSSP_SIGNATURE);
+        msg[8..12].copy_from_slice(&NTLMSSP_CHALLENGE.to_le_bytes());
+        msg[20..24].copy_from_slice(&flags.to_le_bytes());
+        msg[24..32].copy_from_slice(&[0x11; 8]);
+        if let Some(v) = version {
+            msg.extend_from_slice(&v);
+        }
+        msg
+    }
+
+    #[test]
+    fn ntlmssp_challenge_version_is_read_from_offset_48() {
+        // major 10, minor 0, build 20348 (0x4F7C), reserved, revision 15.
+        let bytes = [10u8, 0, 0x7C, 0x4F, 0, 0, 0, 15];
+        let challenge =
+            parse_ntlmssp_challenge(&build_challenge(NTLMSSP_NEGOTIATE_VERSION, Some(bytes)))
+                .expect("challenge parses");
+        let version = challenge.version.expect("server disclosed a build");
+        assert_eq!(
+            (version.major, version.minor, version.build),
+            (10, 0, 20348)
+        );
+        assert_eq!(version.product_string(), "Windows Server 2022 Build 20348");
+    }
+
+    #[test]
+    fn ntlmssp_challenge_without_a_version_is_reported_as_none() {
+        // Flag absent, Version field present: the field is not authoritative.
+        let bytes = [10u8, 0, 0x7C, 0x4F, 0, 0, 0, 15];
+        let challenge =
+            parse_ntlmssp_challenge(&build_challenge(0, Some(bytes))).expect("challenge parses");
+        assert!(challenge.version.is_none());
+
+        // Flag set but the message stops at 48 bytes: nothing to misread.
+        let challenge = parse_ntlmssp_challenge(&build_challenge(NTLMSSP_NEGOTIATE_VERSION, None))
+            .expect("challenge parses");
+        assert!(challenge.version.is_none());
+    }
+
+    #[test]
+    fn ntlm_version_maps_builds_to_release_names() {
+        let v = |major, minor, build| NtlmVersion {
+            major,
+            minor,
+            build,
+        };
+        assert_eq!(
+            v(10, 0, 20348).product_string(),
+            "Windows Server 2022 Build 20348"
+        );
+        assert_eq!(v(10, 0, 26100).product_name(), "Windows Server 2025");
+        assert_eq!(v(10, 0, 17763).product_name(), "Windows Server 2019");
+        assert_eq!(v(10, 0, 14393).product_name(), "Windows Server 2016");
+        assert_eq!(v(10, 0, 19045).product_name(), "Windows 10");
+        assert_eq!(v(10, 0, 22631).product_name(), "Windows 11");
+        assert_eq!(v(6, 1, 7601).product_name(), "Windows 7 / Server 2008 R2");
+        // A build with no known release is reported verbatim, never guessed.
+        assert_eq!(
+            v(10, 0, 30000).product_string(),
+            "Windows 10 / Server 2016+ Build 30000"
+        );
+    }
+
+    #[test]
+    fn ntstatus_name_covers_the_common_file_and_path_errors() {
+        assert_eq!(ntstatus_to_name(0xC000_003A), "OBJECT_PATH_NOT_FOUND");
+        assert_eq!(ntstatus_to_name(0xC000_0035), "OBJECT_NAME_COLLISION");
+        assert_eq!(ntstatus_to_name(0xC000_0043), "SHARING_VIOLATION");
+        assert_eq!(ntstatus_to_name(0xC000_0022), "ACCESS_DENIED");
+        assert_eq!(ntstatus_to_name(0xC000_000D), "INVALID_PARAMETER");
+        assert_eq!(ntstatus_to_name(0xC000_0034), "OBJECT_NAME_NOT_FOUND");
+        assert_eq!(ntstatus_to_name(0xDEAD_BEEF), "UNKNOWN");
     }
 }

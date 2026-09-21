@@ -2201,18 +2201,19 @@ enum SmbAction {
         #[arg(short, long, required = true)]
         targets: String,
     },
-    /// Spider SMB shares for interesting files
+    /// Recursively walk SMB shares and report every file (no default filter)
     Spider {
         /// Target hostname or IP
         #[arg(short, long, required = true)]
         target: String,
-        /// File extensions to search for (comma-separated, e.g. .txt,.docx)
-        #[arg(
-            short,
-            long,
-            default_value = ".txt,.docx,.xlsx,.pdf,.csv,.cfg,.ps1,.xml,.ini,.kdbx,.rdp,.vmdk,.vhdx,.pst,.ost"
-        )]
+        /// Only report these extensions (comma-separated, e.g. .txt,.docx).
+        /// Empty means no filtering -- every file is reported
+        #[arg(short, long, default_value = "")]
         extensions: String,
+        /// Only walk these shares (comma-separated, e.g. SYSVOL,NETLOGON).
+        /// Default: every readable disk share the server advertises
+        #[arg(short = 's', long)]
+        share: Option<String>,
         /// Keyword to search inside file contents (case-insensitive)
         #[arg(long)]
         grep: Option<String>,
@@ -2225,6 +2226,9 @@ enum SmbAction {
         /// Maximum recursion depth (default: 10)
         #[arg(long, default_value = "10")]
         max_depth: usize,
+        /// Print every directory as it is entered, with its entry count
+        #[arg(long)]
+        show_dirs: bool,
     },
     /// Download a file from an SMB share
     Get {
@@ -7877,6 +7881,153 @@ fn split_share_path(input: &str) -> Option<(&str, &str)> {
     Some((share, path))
 }
 
+/// Render `\\host\share\path` for display; an empty `path` is the share root.
+///
+/// Every path the SMB commands print goes through this, so a walk, a listing
+/// and a download all name the same file the same way.
+fn unc(target: &str, share: &str, path: &str) -> String {
+    let mut out = format!(r"\\{target}\{share}");
+    let path = path.trim_matches(['/', '\\']);
+    if !path.is_empty() {
+        out.push('\\');
+        out.push_str(&path.replace('/', "\\"));
+    }
+    out
+}
+
+/// True when `data` looks like UTF-16LE text.
+///
+/// Windows writes its policy and registry text (`.inf`, `.pol`, `GPT.INI`, SAM
+/// exports) as UTF-16LE, so a content search that only tries UTF-8 silently
+/// misses every match in them. The BOM is authoritative; without one, a stream
+/// whose odd bytes are mostly zero is UTF-16LE ASCII.
+fn looks_utf16le(data: &[u8]) -> bool {
+    if data.starts_with(&[0xFF, 0xFE]) {
+        return true;
+    }
+    if data.len() < 8 {
+        return false;
+    }
+    let pairs = data.len() / 2;
+    let zero_high_bytes = data.chunks_exact(2).filter(|c| c[1] == 0).count();
+    zero_high_bytes * 100 / pairs >= 30
+}
+
+/// Decode file bytes into text for content search, honouring UTF-16LE/BE and
+/// falling back to UTF-8. Always lossy, never fails.
+fn decode_text(data: &[u8]) -> String {
+    if data.starts_with(&[0xFE, 0xFF]) {
+        let body = &data[2..];
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    if looks_utf16le(data) {
+        let body = data.strip_prefix(&[0xFF, 0xFE]).unwrap_or(data);
+        let units: Vec<u16> = body
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        return String::from_utf16_lossy(&units);
+    }
+    String::from_utf8_lossy(data).into_owned()
+}
+
+/// Byte count rendered for humans, keeping the exact value.
+fn human_size(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes as f64;
+    let mut unit = 0usize;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
+/// `0x0311` -> `SMB 3.1.1`, the dialect names SMB clients print.
+fn dialect_label(dialect: u16) -> String {
+    match dialect {
+        0x0202 => "SMB 2.0.2".to_string(),
+        0x0210 => "SMB 2.1".to_string(),
+        0x0300 => "SMB 3.0".to_string(),
+        0x0302 => "SMB 3.0.2".to_string(),
+        0x0311 => "SMB 3.1.1".to_string(),
+        other => format!("0x{other:04X}"),
+    }
+}
+
+/// One-line host summary in the shape `nxc smb <host>` prints.
+///
+/// Every field is read off the wire: the OS build comes from the `Version`
+/// field the server itself put in its NTLM challenge (falling back to the
+/// release implied by the LDAP domain functionality level when the server
+/// withholds it), name/domain come from the challenge `AV_PAIR`s, and
+/// signing/dialect come from our own negotiate.
+async fn smb_host_banner(target: &str, smb: &overthrone_core::proto::smb::SmbSession) -> String {
+    let identity = overthrone_core::proto::smb2::Smb2Connection::probe_server_identity(target)
+        .await
+        .ok();
+
+    let os = match identity.as_ref().and_then(|i| i.os_version) {
+        Some(v) => v.product_string(),
+        None => {
+            let level = overthrone_core::proto::ldap::probe_rootdse_raw(target, false)
+                .await
+                .ok()
+                .and_then(|r| r.domain_functionality)
+                .and_then(|s| s.parse::<u32>().ok());
+            match level {
+                Some(l) => {
+                    overthrone_core::proto::ldap::domain_functionality_release(l).to_string()
+                }
+                None => "Windows (version not disclosed)".to_string(),
+            }
+        }
+    };
+
+    // NetBIOS name first, then the FQDN: `nxc smb <host>` prints `name:DC01`
+    // next to `domain:LAINOSCP.local`, and the short name is what the server
+    // calls itself elsewhere in its own output.
+    let name = identity
+        .as_ref()
+        .and_then(|i| i.computer_name.clone())
+        .or_else(|| identity.as_ref().and_then(|i| i.dns_computer_name.clone()))
+        .unwrap_or_else(|| "?".to_string());
+    let domain = identity
+        .as_ref()
+        .and_then(|i| i.dns_domain_name.clone())
+        .or_else(|| identity.as_ref().and_then(|i| i.domain_name.clone()))
+        .unwrap_or_else(|| "?".to_string());
+
+    let diag = smb.signing_diagnostics().await;
+    let signing = match diag.as_ref() {
+        Some(d) if d.signing_required => "True".red().bold().to_string(),
+        Some(_) => "False".to_string(),
+        None => "unknown".to_string(),
+    };
+    let dialect = diag
+        .as_ref()
+        .map(|d| dialect_label(d.dialect))
+        .unwrap_or_else(|| "unknown".to_string());
+    let smbv1 = match crate::commands::nxc::probe_smb1(target).await {
+        Some(true) => "True".red().bold().to_string(),
+        Some(false) => "False".to_string(),
+        None => "unknown".to_string(),
+    };
+
+    format!(
+        "{os} (name:{name}) (domain:{domain}) (signing:{signing}) (SMBv1:{smbv1}) \
+         (dialect:{dialect})"
+    )
+}
+
 // cmd_smb
 async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
     banner::print_module_banner("SMB");
@@ -7954,6 +8105,41 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
+            // Host banner in the same shape `nxc smb <host>` prints, then the
+            // credential the session was opened with, then the enumeration.
+            println!(
+                "  {} {}",
+                "[*]".cyan(),
+                smb_host_banner(&target, &smb).await
+            );
+            match &creds {
+                Some(c) => {
+                    let secret = match &c.auth {
+                        auth::AuthData::Password(p) => p.clone(),
+                        auth::AuthData::NtlmHash(h) => h.clone(),
+                        auth::AuthData::KerberosTicket(_) => "(kerberos ticket)".to_string(),
+                    };
+                    let domain = if c.domain.is_empty() {
+                        target.clone()
+                    } else {
+                        c.domain.clone()
+                    };
+                    println!(
+                        "  {} {}\\{}:{}",
+                        "[+]".green().bold(),
+                        domain,
+                        c.username,
+                        secret
+                    );
+                }
+                None => println!(
+                    "  {} {} -- {}",
+                    "[-]".red(),
+                    target,
+                    "no credentials supplied, using an anonymous session".dimmed()
+                ),
+            }
+            println!("  {} Enumerated shares", "[*]".cyan());
             // Enumerate shares for real through SRVSVC NetShareEnumAll and
             // report the server's own type and remark for each one, then verify
             // read and write access with a tree connect and a write probe --
@@ -8035,10 +8221,12 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
         SmbAction::Spider {
             target,
             extensions,
+            share,
             grep,
             regex,
             output_dir,
             max_depth,
+            show_dirs,
         } => {
             let ext_list: Vec<String> = extensions
                 .split(',')
@@ -8068,7 +8256,13 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 return 1;
             }
 
-            let mut search_desc = ext_list.join(", ");
+            // State the real filter state: with no --extensions there is no
+            // extension filter at all, rather than an implied "interesting" list.
+            let mut search_desc = if ext_list.is_empty() {
+                "no extension filter (every file)".to_string()
+            } else {
+                format!("extensions: {}", ext_list.join(", "))
+            };
             if content_search {
                 if let Some(ref k) = grep {
                     search_desc = format!("{} | grep: {}", search_desc, k);
@@ -8093,18 +8287,52 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                 }
             };
 
-            let candidate_shares = &[
-                "C$", "ADMIN$", "Users", "Shares", "Public", "Data", "IT", "Backups", "Finance",
-                "HR",
-            ];
+            // Which shares to walk. Names passed to `--share` are used verbatim;
+            // otherwise the walk covers every share the *server* advertises as a
+            // readable disk share. There is no baked-in candidate list -- a
+            // hard-coded list is exactly what made the old spider report "no
+            // files" on hosts whose share names it had not guessed.
+            let share_names: Vec<String> = match &share {
+                Some(list) => list
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect(),
+                None => smb
+                    .enumerate_accessible_shares()
+                    .await
+                    .iter()
+                    .filter(|s| s.readable && s.share_type != "IPC")
+                    .map(|s| s.share_name.clone())
+                    .collect(),
+            };
+            if share_names.is_empty() {
+                banner::print_fail(
+                    "No share to spider -- the server advertised no readable share and no --share \
+                     was given",
+                );
+                return 1;
+            }
+
             let mut total_found = 0usize;
+            let mut total_files = 0usize;
+            let mut total_dirs = 0usize;
             let mut content_matches = 0usize;
             let mut downloaded = 0usize;
+            let mut list_errors = 0usize;
+            let mut shares_walked = 0usize;
 
-            for &share in candidate_shares {
+            for share in &share_names {
                 if !smb.check_share_read(share).await {
+                    println!(
+                        " {} {} -- {}",
+                        "!".red().bold(),
+                        unc(target.as_str(), share, ""),
+                        "not readable, skipped".dimmed()
+                    );
                     continue;
                 }
+                shares_walked += 1;
                 println!(
                     " {} \\\\{}\\{}",
                     ">".bright_black(),
@@ -8112,22 +8340,68 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     share.yellow()
                 );
 
-                // BFS walk of the share with depth tracking
+                // Walk of the share with explicit depth tracking. `queue.pop()`
+                // drains the deepest discovered directory first, so a deep tree
+                // still reports its shallow files early.
                 let mut queue: Vec<(String, usize)> = vec![(String::new(), 0)];
+                let mut files_here = 0usize;
+                let mut dirs_here = 0usize;
                 while let Some((dir, depth)) = queue.pop() {
                     if depth >= max_depth {
+                        println!(
+                            " {} {} -- {}",
+                            "!".yellow().bold(),
+                            unc(target.as_str(), share, &dir),
+                            format!("depth limit of {max_depth} reached, not descended").dimmed()
+                        );
                         continue;
                     }
                     let entries = match smb.list_directory(share, &dir).await {
                         Ok(e) => e,
-                        Err(_) => continue,
+                        Err(e) => {
+                            // A directory that cannot be listed is reported with
+                            // the server's own error, not silently skipped -- the
+                            // walk is depth-first over the *whole* share, and an
+                            // unreadable sub-tree is a finding, not a hiccup.
+                            list_errors += 1;
+                            if list_errors <= 10 {
+                                println!(
+                                    " {} {} -- {}",
+                                    "!".yellow().bold(),
+                                    unc(target.as_str(), share, &dir),
+                                    format!("{e}").dimmed()
+                                );
+                            } else if list_errors == 11 {
+                                println!(
+                                    "    {} {}",
+                                    "!".yellow(),
+                                    "further listing failures suppressed".dimmed()
+                                );
+                            }
+                            continue;
+                        }
                     };
+                    if show_dirs {
+                        println!(
+                            "    {} {} {}",
+                            "[dir]".bright_black(),
+                            unc(target.as_str(), share, &dir).cyan(),
+                            format!("({} entries)", entries.len()).dimmed()
+                        );
+                    }
                     for entry in entries {
                         if entry.is_directory {
-                            if queue.len() < 5000 {
+                            dirs_here += 1;
+                            total_dirs += 1;
+                            // Sub-folders are always descended: files nested inside
+                            // them are the point of the walk, so no directory is
+                            // skipped by name, type or age.
+                            if queue.len() < 100_000 {
                                 queue.push((entry.path.clone(), depth + 1));
                             }
                         } else {
+                            files_here += 1;
+                            total_files += 1;
                             let name_lower = entry.name.to_lowercase();
                             let matched = ext_list.is_empty()
                                 || ext_list
@@ -8144,18 +8418,26 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                                 entry.path
                             );
 
+                            // Raw server metadata from
+                            // FILE_DIRECTORY_INFORMATION: DOS attribute string,
+                            // size and last-write time -- the same columns
+                            // `smbclient ls` prints -- plus the full UNC path.
                             let mut print_line = format!(
-                                " {} {} ({} bytes)",
+                                " {} {} [{}] {:>12} {}",
                                 "".bright_black(),
                                 display_path,
-                                entry.size
+                                entry.attribute_string(),
+                                human_size(entry.size),
+                                entry.modified.as_deref().unwrap_or("-").dimmed()
                             );
 
                             if content_search {
                                 match smb.read_file(share, &entry.path).await {
                                     Ok(data) => {
-                                        let content_lower =
-                                            String::from_utf8_lossy(&data).to_lowercase();
+                                        // Real decoders: Windows policy/registry
+                                        // text is UTF-16LE, so a UTF-8-only search
+                                        // finds nothing inside it.
+                                        let content_lower = decode_text(&data).to_lowercase();
                                         let mut content_hit = false;
 
                                         if let Some(ref kw) = keyword {
@@ -8205,12 +8487,33 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                         }
                     }
                 }
+                println!(
+                    " {} {} -- {} file(s) in {} director(ies)",
+                    "+".green(),
+                    unc(target.as_str(), share, "").cyan(),
+                    files_here,
+                    dirs_here
+                );
+            }
+
+            if list_errors > 0 {
+                banner::print_warn(&format!(
+                    "{list_errors} director(ies) could not be listed (permission denied or \
+                     removed during the walk)"
+                ));
             }
 
             if total_found == 0 {
-                banner::print_warn("No matching files found");
+                banner::print_warn(&format!(
+                    "No file found -- {total_files} file(s) and {total_dirs} director(ies) were \
+                     walked across {shares_walked} share(s)"
+                ));
             } else {
                 let mut summary = format!("Spider found {} matching file(s)", total_found);
+                summary.push_str(&format!(
+                    " out of {} walked across {} share(s)",
+                    total_files, shares_walked
+                ));
                 if content_matches > 0 {
                     summary.push_str(&format!(", {} content matches", content_matches));
                 }
@@ -10228,5 +10531,134 @@ mod cli_parse_tests {
         assert!(powerview_json.contains("alice"));
 
         let _ = std::fs::remove_dir_all(&loot_root);
+    }
+
+    /// Every path the SMB commands print must be a real UNC path: the old
+    /// `smb shell` `pwd` glued host and share together (`\\hostSYSVOL`).
+    #[test]
+    fn unc_renders_host_share_and_nested_path() {
+        assert_eq!(
+            unc("192.168.5.245", "SYSVOL", ""),
+            r"\\192.168.5.245\SYSVOL"
+        );
+        assert_eq!(
+            unc("192.168.5.245", "SYSVOL", "LAINOSCP.local/Policies"),
+            r"\\192.168.5.245\SYSVOL\LAINOSCP.local\Policies"
+        );
+        // A path that already uses separators (or a leading one) must not
+        // produce doubled backslashes.
+        assert_eq!(
+            unc("host", "C$", "\\Windows\\Temp"),
+            r"\\host\C$\Windows\Temp"
+        );
+        assert_eq!(unc("host", "C$", "/"), r"\\host\C$");
+    }
+
+    #[test]
+    fn human_size_keeps_the_value_and_scales_the_unit() {
+        assert_eq!(human_size(0), "0 B");
+        assert_eq!(human_size(22), "22 B");
+        assert_eq!(human_size(1024), "1.0 KiB");
+        assert_eq!(human_size(3794), "3.7 KiB");
+        assert_eq!(human_size(1_048_576), "1.0 MiB");
+    }
+
+    /// Windows writes policy/registry text as UTF-16LE; a UTF-8-only search
+    /// silently misses every match inside it.
+    #[test]
+    fn decode_text_reads_utf16le_policy_files() {
+        let utf16: Vec<u8> = "[Unicode]\r\nPasswordComplexity=1"
+            .encode_utf16()
+            .flat_map(|u| u.to_le_bytes())
+            .collect();
+        let mut with_bom = vec![0xFF, 0xFE];
+        with_bom.extend_from_slice(&utf16);
+
+        assert!(looks_utf16le(&with_bom));
+        // No BOM, but the high bytes are zero: still UTF-16LE ASCII.
+        assert!(looks_utf16le(&utf16));
+        assert!(decode_text(&with_bom).contains("PasswordComplexity=1"));
+        assert!(
+            decode_text(&utf16)
+                .to_lowercase()
+                .contains("passwordcomplexity=1")
+        );
+
+        // Plain UTF-8 must be untouched, and binary must not panic.
+        assert!(!looks_utf16le(b"plain ascii text here"));
+        assert_eq!(
+            decode_text(b"plain ascii text here"),
+            "plain ascii text here"
+        );
+        assert!(!decode_text(&[0x00, 0xFF, 0x10]).is_empty());
+    }
+
+    #[test]
+    fn dialect_label_names_the_negotiated_dialect() {
+        assert_eq!(dialect_label(0x0311), "SMB 3.1.1");
+        assert_eq!(dialect_label(0x0302), "SMB 3.0.2");
+        assert_eq!(dialect_label(0x0210), "SMB 2.1");
+        assert_eq!(dialect_label(0x9999), "0x9999");
+    }
+
+    /// `spider` must not filter by default: with no `--extensions` the walk is
+    /// supposed to report every file, including ones with no extension at all.
+    #[test]
+    fn spider_defaults_to_no_extension_filter() {
+        let cli = parse_cli(&["ovt", "smb", "spider", "-t", "192.168.5.245"]);
+        match *cli.command {
+            Commands::Smb {
+                action:
+                    SmbAction::Spider {
+                        ref extensions,
+                        ref share,
+                        max_depth,
+                        show_dirs,
+                        ..
+                    },
+            } => {
+                assert!(extensions.is_empty(), "no default extension filter");
+                assert!(share.is_none(), "shares come from the server by default");
+                assert_eq!(max_depth, 10);
+                assert!(!show_dirs);
+            }
+            _ => panic!("expected Smb::Spider"),
+        }
+    }
+
+    #[test]
+    fn spider_accepts_extensions_shares_and_depth() {
+        let cli = parse_cli(&[
+            "ovt",
+            "smb",
+            "spider",
+            "-t",
+            "192.168.5.245",
+            "-e",
+            ".txt,.inf",
+            "-s",
+            "SYSVOL,NETLOGON",
+            "--max-depth",
+            "3",
+            "--show-dirs",
+        ]);
+        match *cli.command {
+            Commands::Smb {
+                action:
+                    SmbAction::Spider {
+                        ref extensions,
+                        ref share,
+                        max_depth,
+                        show_dirs,
+                        ..
+                    },
+            } => {
+                assert_eq!(extensions, ".txt,.inf");
+                assert_eq!(share.as_deref(), Some("SYSVOL,NETLOGON"));
+                assert_eq!(max_depth, 3);
+                assert!(show_dirs);
+            }
+            _ => panic!("expected Smb::Spider"),
+        }
     }
 }

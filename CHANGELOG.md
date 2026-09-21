@@ -112,6 +112,54 @@ With enumeration working, the table carries only server-reported data:
   and `smb get --path SYSVOL/LAINOSCP.local/Policies/{...F9}/gpt.ini` downloads
   the real 22-byte file.
 
+### `ovt smb shares` prints the host banner, not just a table
+
+- **The banner `nxc smb <host>` prints is now the first three lines of the
+  command**: the real OS build, the name and domain the server answered with,
+  whether signing is required, whether SMB1 is still accepted, the negotiated
+  dialect, the credential the session was opened with, and an explicit
+  `Enumerated shares` marker before the table.
+- **The OS string is read off the wire, never guessed.** New
+  `smb2::NtlmVersion` decodes the `Version` field the server itself puts in its
+  NTLM challenge (`major.minor.build`, MS-NLMP §2.2.2.2 offset 48) and maps the
+  build to its release name, so a Server 2022 DC reports
+  `Windows Server 2022 Build 20348`. When a server withholds the field the
+  release implied by the LDAP domain functionality level is used, and if that is
+  unavailable too the line says so rather than inventing a version.
+- **`smb shell`'s `pwd` prints a real UNC path.** It rendered `\\hostSYSVOL\...`
+  -- the backslash between host and share was missing.
+- **NTSTATUS codes are named.** `0xC000003A` printed as `(UNKNOWN)`; the table now
+  covers the file, path, handle, share and account statuses an SMB client
+  actually hits (`OBJECT_PATH_NOT_FOUND`, `OBJECT_NAME_COLLISION`,
+  `SHARING_VIOLATION`, `FILE_IS_A_DIRECTORY`, `PIPE_NOT_AVAILABLE`, ...).
+  A stale `0xC0000071 => INVALID_SMB` mapping is gone: that code is
+  `STATUS_PASSWORD_EXPIRED`.
+
+### `ovt smb spider` walks shares instead of guessing at them
+
+- **No default filter.** The command used to search a built-in list of fourteen
+  "interesting" extensions, so a share full of files reported
+  `No matching files found`. `--extensions` is now opt-in and defaults to empty;
+  with no filter every file is reported, extension or not.
+- **Shares come from the server.** The hard-coded ten-name candidate list (`C$`,
+  `Users`, `Shares`, `Public`, ...) is gone. The walk covers every share SRVSVC
+  advertises as a readable disk share, or exactly the shares named with the new
+  `-s/--share SYSVOL,NETLOGON`.
+- **Recursion is real and reported.** Every sub-folder is descended
+  (`--max-depth`, default 10); files nested four levels inside a GPO are found.
+  A folder that cannot be listed is printed with the server's own error instead
+  of being skipped silently, a directory at the depth limit says so, and
+  `--show-dirs` prints each directory as it is entered with its entry count.
+- **Every line carries real metadata**: the DOS attribute column, the size and
+  the last-write time from `SMB2_FILE_DIRECTORY_INFORMATION`, plus the full UNC
+  path, followed by a per-share summary and a total (`5 file(s) in 16
+  director(ies)`).
+- **Content search reads UTF-16.** `--grep`/`--regex` compared UTF-8 bytes, so
+  every Windows policy, registry or INF file -- all written as UTF-16LE --
+  matched nothing. Files are now decoded as UTF-16LE/BE (BOM or a
+  zero-high-byte heuristic) with a UTF-8 fallback before matching, which is what
+  makes `--grep Password` find `GptTmpl.inf`.
+
 ### Priority-3 completeness
 
 - **Removed dead duplicate modules.** `crates/overthrone-cli/src/commands/enum_commands/`

@@ -102,9 +102,9 @@ impl SmbShell {
     /// The UNC path the shell is currently sitting in, for display.
     fn unc(&self) -> String {
         if self.cwd.is_empty() {
-            format!(r"\\{}{}", self.target, self.share)
+            format!(r"\\{}\{}", self.target, self.share)
         } else {
-            format!(r"\\{}{}{}", self.target, self.share, self.remote_path(""))
+            format!(r"\\{}\{}{}", self.target, self.share, self.remote_path(""))
         }
     }
 
