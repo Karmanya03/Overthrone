@@ -2260,6 +2260,37 @@ impl SmbSession {
         Some(self.inner.lock().await.signing_diagnostics().await)
     }
 
+    /// Return the stored reconnection password (if any).
+    pub fn reconnect_password(&self) -> Option<&str> {
+        self.reconnect_password.as_deref()
+    }
+
+    /// Return the stored reconnection NT hash (if any).
+    pub fn reconnect_nt_hash(&self) -> Option<&str> {
+        self.reconnect_nt_hash.as_deref()
+    }
+
+    /// Reconnect the inner SMB2 connection by creating a fresh TCP connection
+    /// and re-authenticating. Used when the current session becomes desynchronized
+    /// after IOCTL operations on WS2025 SMB 3.1.1.
+    pub async fn reconnect_inner(&self) -> Result<()> {
+        let conn = super::smb2::Smb2Connection::connect(&self.target, SMB_PORT).await?;
+        conn.negotiate().await?;
+        if let Some(ref hash) = self.reconnect_nt_hash {
+            conn.session_setup_hash(&self.domain, &self.username, hash)
+                .await?;
+        } else if let Some(ref password) = self.reconnect_password {
+            conn.session_setup(&self.domain, &self.username, password)
+                .await?;
+        } else {
+            return Err(OverthroneError::Smb(
+                "No stored credentials for reconnection".to_string(),
+            ));
+        }
+        *self.inner.lock().await = conn;
+        Ok(())
+    }
+
     pub async fn connect_share(&self, share: &str) -> Result<()> {
         let share_path = format!(r"\\{}\{}", self.target, share);
         let conn = self.inner.lock().await;
