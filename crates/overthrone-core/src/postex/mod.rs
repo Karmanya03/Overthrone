@@ -34,6 +34,7 @@ pub mod golden_dmsa;
 pub mod ldap_force_update;
 pub mod litterbox;
 pub mod lsaiso;
+pub mod minidump_parser;
 pub mod opsec;
 pub mod sherlock;
 pub mod skeleton_key;

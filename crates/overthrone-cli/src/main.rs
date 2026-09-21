@@ -2323,15 +2323,19 @@ enum SmbAction {
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum DumpSource {
+    /// Dump SAM hashes via remote registry hive extraction
     Sam,
+    /// Dump LSA secrets (service accounts, DPAPI keys, machine account hash)
     Lsa,
-    /// DRSUAPI DCSync (replaces VSS-based NTDS dump)
+    /// DRSUAPI DCSync -- pull all domain NTLM hashes via MS-DRSR replication
+    #[value(alias = "dcsync")]
     Ntds,
     /// NTDS.dit via VSS+SMB @GMT shadow copy read (bypasses WS2025 file-write sandbox)
     NtdsVss,
+    /// Dump DCC2 cached domain logon credentials
     Dcc2,
-    /// DRSUAPI DCSync (alias for ntds)
-    Dcsync,
+    /// Remote LSASS dump + download + parse (comsvcs.dll MiniDump on target, download .dmp, parse locally)
+    Lsass,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
@@ -8571,7 +8575,35 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     }
                 }
                 Err(e) => {
-                    banner::print_fail(&format!("Download failed: {}", e));
+                    let err_msg = e.to_string();
+                    banner::print_fail(&format!("Download failed: {}", err_msg));
+                    if err_msg.contains("STATUS_OBJECT_PATH_NOT_FOUND")
+                        || err_msg.contains("0xC000003A")
+                        || err_msg.contains("not found")
+                    {
+                        println!(
+                            " {} The remote file was not found. Common causes:",
+                            "!".bright_black()
+                        );
+                        println!(
+                            "   - File does not exist (check path with {})",
+                            "ovt smb ls <target> <share>".yellow()
+                        );
+                        println!(
+                            "   - LSASS sandbox: WS2025 blocks cmd.exe file creation from services"
+                        );
+                        println!(
+                            "   - Path uses backslashes -- use forward slashes: C$/path/file.txt"
+                        );
+                    } else if err_msg.contains("STATUS_ACCESS_DENIED")
+                        || err_msg.contains("0xC0000022")
+                    {
+                        println!(
+                            " {} Access denied. Ensure you are using admin credentials \
+                             (Administrator, Domain Admin, etc.)",
+                            "!".bright_black()
+                        );
+                    }
                     return 1;
                 }
             }
@@ -9027,11 +9059,31 @@ async fn cmd_exec(
     };
 
     match exec_result {
-        Ok((_, output)) => {
+        Ok((success, output)) => {
             if !output.is_empty() {
+                println!();
                 println!("{}", output);
+                println!();
+                banner::print_success(&format!(
+                    "Command executed successfully ({} bytes of output)",
+                    output.len()
+                ));
+            } else if success {
+                banner::print_success("Command executed (no output returned)");
+                println!(
+                    "  {} Tip: The command may have run but produced no stdout. \
+                     If this is unexpected, the sandbox may be blocking output file creation.",
+                    "!".bright_black()
+                );
+            } else {
+                banner::print_fail("Command executed but returned failure status");
+                println!(
+                    "  {} The remote service started but the command may have failed or \
+                     produced no output. Check if the target has SMB signing issues or \
+                     sandbox restrictions.",
+                    "!".bright_black()
+                );
             }
-            banner::print_success("Command executed");
             0
         }
         Err(e) => {

