@@ -7909,7 +7909,12 @@ fn looks_utf16le(data: &[u8]) -> bool {
         return false;
     }
     let pairs = data.len() / 2;
-    let zero_high_bytes = data.chunks_exact(2).filter(|c| c[1] == 0).count();
+    let zero_high_bytes = data
+        .iter()
+        .step_by(2)
+        .zip(data.iter().skip(1).step_by(2))
+        .filter(|(_, hi)| *hi == &0)
+        .count();
     zero_high_bytes * 100 / pairs >= 30
 }
 
@@ -7919,16 +7924,20 @@ fn decode_text(data: &[u8]) -> String {
     if data.starts_with(&[0xFE, 0xFF]) {
         let body = &data[2..];
         let units: Vec<u16> = body
-            .chunks_exact(2)
-            .map(|c| u16::from_be_bytes([c[0], c[1]]))
+            .iter()
+            .step_by(2)
+            .zip(body.iter().skip(1).step_by(2))
+            .map(|(&lo, &hi)| u16::from_be_bytes([lo, hi]))
             .collect();
         return String::from_utf16_lossy(&units);
     }
     if looks_utf16le(data) {
         let body = data.strip_prefix(&[0xFF, 0xFE]).unwrap_or(data);
         let units: Vec<u16> = body
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .iter()
+            .step_by(2)
+            .zip(body.iter().skip(1).step_by(2))
+            .map(|(&lo, &hi)| u16::from_le_bytes([lo, hi]))
             .collect();
         return String::from_utf16_lossy(&units);
     }
