@@ -83,11 +83,16 @@ fn test_share_access_readable_only() {
         readable: true,
         writable: false,
         is_admin_share: false,
+        share_type: "Disk".to_string(),
+        remark: "Logon server share".to_string(),
+        enumerated: true,
     };
     assert_eq!(result.share_name, "SYSVOL");
     assert!(result.readable);
     assert!(!result.writable);
     assert!(!result.is_admin_share);
+    assert_eq!(result.remark, "Logon server share");
+    assert!(result.enumerated);
 }
 
 #[test]
@@ -97,6 +102,9 @@ fn test_share_access_read_write() {
         readable: true,
         writable: true,
         is_admin_share: false,
+        share_type: "Disk".to_string(),
+        remark: String::new(),
+        enumerated: true,
     };
     assert!(result.readable);
     assert!(result.writable);
@@ -109,6 +117,9 @@ fn test_share_access_admin_share() {
         readable: true,
         writable: true,
         is_admin_share: true,
+        share_type: "Disk".to_string(),
+        remark: "Default share".to_string(),
+        enumerated: true,
     };
     assert!(result.is_admin_share);
     assert_eq!(result.share_name, "C$");
@@ -121,6 +132,9 @@ fn test_share_access_no_access() {
         readable: false,
         writable: false,
         is_admin_share: true,
+        share_type: "Disk".to_string(),
+        remark: "Remote Admin".to_string(),
+        enumerated: true,
     };
     assert!(!result.readable);
     assert!(!result.writable);
@@ -134,9 +148,13 @@ fn test_share_access_ipc_share() {
         readable: true,
         writable: false,
         is_admin_share: false,
+        share_type: "IPC".to_string(),
+        remark: "Remote IPC".to_string(),
+        enumerated: true,
     };
     assert_eq!(result.share_name, "IPC$");
     assert!(!result.is_admin_share);
+    assert_eq!(result.share_type, "IPC");
 }
 
 // ===========================================================

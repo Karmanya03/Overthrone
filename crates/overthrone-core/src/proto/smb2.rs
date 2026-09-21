@@ -110,26 +110,44 @@ fn update_preauth_hash(old_hash: &[u8], message_data: &[u8]) -> Vec<u8> {
 ///
 /// The session key is the NTLM ExportedSessionKey (untransformed).
 /// Returns a 16-byte AES-CMAC signing key.
+///
+/// `preauth_hash` selects the KDF context, and with it the label:
+///
+/// * `Some(hash)` -- the SMB 3.1.1 derivation: label `SMBSigningKey\0` and the
+///   64-byte `Session.PreauthIntegrityHashValue` as context.
+/// * `None` -- the SMB 3.0/3.0.2 derivation: label `SMB2AESCMAC\0` and the
+///   literal `SmbSign\0` as context. This is also the second candidate a 3.1.1
+///   session gets probed against, because some Windows builds sign an
+///   AES-128-GCM session with the 3.0.x derivation.
+///
+/// The two derivations are not interchangeable. Pairing the `SMBSigningKey`
+/// label with a `SmbSign` context -- which the previous version did whenever a
+/// 3.1.1 session had no pre-auth hash -- matches no implementation at all, so
+/// two of the four probe candidates could never validate.
 fn derive_signing_key(session_key: &[u8], dialect: u16, preauth_hash: Option<&[u8]>) -> [u8; 16] {
-    let (label, ctx_bytes): (&[u8], &[u8]) = if dialect >= SMB2_DIALECT_311 {
-        // SMB 3.1.1: context = PreauthIntegrityHashValue (SHA-512 of all pre-auth messages)
-        // Impacket: KDF_CounterMode(sessionKey, b"SMBSigningKey\x00", preauthHash, 128)
-        if let Some(hash) = preauth_hash {
-            let key = sp800_108_counter_kdf(session_key, b"SMBSigningKey\x00", hash);
-            let mut sig = [0u8; 16];
-            sig.copy_from_slice(&key[..16]);
-            return sig;
-        }
-        (b"SMBSigningKey\x00", b"SmbSign\x00")
-    } else {
-        // SMB 3.0.x: Impacket: KDF_CounterMode(sessionKey, b"SMB2AESCMAC\x00", b"SmbSign\x00", 128)
-        (b"SMB2AESCMAC\x00", b"SmbSign\x00")
-    };
-    let key = sp800_108_counter_kdf(session_key, label, ctx_bytes);
+    // SMB 3.1.1, pre-auth integrity hash available: the spec derivation.
+    if dialect >= SMB2_DIALECT_311
+        && let Some(hash) = preauth_hash
+    {
+        let key = sp800_108_counter_kdf(session_key, b"SMBSigningKey\x00", hash);
+        let mut sig = [0u8; 16];
+        sig.copy_from_slice(&key[..16]);
+        return sig;
+    }
+    // SMB 3.0/3.0.2 -- and the fallback candidate for a 3.1.1 session.
+    let key = sp800_108_counter_kdf(session_key, b"SMB2AESCMAC\x00", b"SmbSign\x00");
     let mut sig = [0u8; 16];
     sig.copy_from_slice(&key[..16]);
     sig
 }
+
+// SMB2 GLOBAL_CAPABILITIES (MS-SMB2 §2.2.4 / §2.2.5)
+const SMB2_GLOBAL_CAP_ENCRYPTION: u32 = 0x0000_0040;
+
+// SMB2_SESSION_FLAGS (MS-SMB2 §2.2.6)
+const SMB2_SESSION_FLAG_IS_GUEST: u16 = 0x0001;
+const SMB2_SESSION_FLAG_IS_NULL: u16 = 0x0002;
+const SMB2_SESSION_FLAG_ENCRYPT_DATA: u16 = 0x0004;
 
 // SMB2 Flags
 const SMB2_FLAGS_SERVER_TO_REDIR: u32 = 0x0000_0001;
@@ -273,6 +291,40 @@ fn ntstatus_to_name(code: u32) -> &'static str {
     }
 }
 
+/// The `SMB2_*` command carried by a packet header, named for diagnostics.
+///
+/// `recv_verified` reports which response failed signature verification; a
+/// command number alone would make that report unreadable.
+fn packet_command(pkt: &[u8]) -> String {
+    if pkt.len() < SMB2_HEADER_SIZE {
+        return format!("short packet ({} bytes)", pkt.len());
+    }
+    let command = u16::from_le_bytes([pkt[12], pkt[13]]);
+    let name = match command {
+        SMB2_NEGOTIATE => "NEGOTIATE",
+        SMB2_SESSION_SETUP => "SESSION_SETUP",
+        SMB2_LOGOFF => "LOGOFF",
+        SMB2_TREE_CONNECT => "TREE_CONNECT",
+        SMB2_TREE_DISCONNECT => "TREE_DISCONNECT",
+        0x0005 => "CREATE",
+        0x0006 => "CLOSE",
+        0x0007 => "FLUSH",
+        0x0008 => "READ",
+        0x0009 => "WRITE",
+        0x000A => "LOCK",
+        0x000B => "IOCTL",
+        0x000C => "CANCEL",
+        0x000D => "ECHO",
+        0x000E => "QUERY_DIRECTORY",
+        0x000F => "CHANGE_NOTIFY",
+        0x0010 => "QUERY_INFO",
+        0x0011 => "SET_INFO",
+        0x0012 => "OPLOCK_BREAK",
+        _ => "unknown command",
+    };
+    format!("{name} (0x{command:04X})")
+}
+
 // -----------------------------------------------------------
 //  SMB3 Transform_Header (MS-SMB2 §2.2.41)
 // -----------------------------------------------------------
@@ -409,6 +461,16 @@ impl SigningVariant {
     }
 }
 
+/// Every signing candidate, with `preferred` first.
+///
+/// Used both when probing an incoming signature and when walking candidates for
+/// an outgoing request that the peer rejected.
+fn variant_probe_order(preferred: SigningVariant) -> [SigningVariant; 4] {
+    let mut order = SigningVariant::ALL;
+    order.sort_by_key(|v| u8::from(*v != preferred));
+    order
+}
+
 /// Snapshot of every input and output of the SMB 3.x signing-key derivation.
 ///
 /// This exists so the signing key can be compared byte-for-byte against a
@@ -478,6 +540,13 @@ pub struct Smb2Connection {
     /// 0x0002 = AES-128-GCM). Only meaningful for SMB 3.1.1 -- earlier dialects
     /// have no cipher negotiation and always use AES-128-CCM.
     cipher_id: AtomicU16,
+    /// Whether the server advertised SMB2_GLOBAL_CAP_ENCRYPTION (or returned a
+    /// usable cipher in the `SMB2_ENCRYPTION_CAPABILITIES` negotiate context).
+    /// Gates [`Self::maybe_enable_encryption`].
+    encryption_supported: std::sync::atomic::AtomicBool,
+    /// `SessionFlags` from the final SESSION_SETUP response: bit 0 guest,
+    /// bit 1 null session, bit 2 encrypt-data (MS-SMB2 §2.2.6).
+    session_flags: AtomicU32,
 }
 
 impl Drop for Smb2Connection {
@@ -546,6 +615,8 @@ impl Smb2Connection {
             signing_variant: Mutex::new(None),
             // 0 = not negotiated yet; see `negotiated_cipher`.
             cipher_id: AtomicU16::new(0),
+            encryption_supported: std::sync::atomic::AtomicBool::new(false),
+            session_flags: AtomicU32::new(0),
         })
     }
 
@@ -637,6 +708,15 @@ impl Smb2Connection {
     async fn recv_verified(&self) -> Result<Vec<u8>> {
         let buf = self.recv().await?;
 
+        // An encrypted SMB3 payload is authenticated by its AEAD tag, and Windows
+        // does not set SMB2_FLAGS_SIGNED on encrypted responses -- so treating a
+        // decrypted payload as a signed packet would report a mismatch on every
+        // response. Impacket likewise relies on the tag alone once encryption is
+        // on. (See `smb3_decrypt`, which fails loudly on a bad tag.)
+        if self.encryption_required.load(Ordering::Relaxed) {
+            return Ok(buf);
+        }
+
         // Skip verification once the peer has repeatedly presented packets we cannot
         // validate. With the cipher-correct signing algorithm this should never
         // trigger; it is retained purely as a safety net so that one bad packet
@@ -654,55 +734,42 @@ impl Smb2Connection {
         if self
             .sign_required
             .load(std::sync::atomic::Ordering::Relaxed)
-            && let Some(ref key) = *self.session_key.lock().await
+            && self.session_key.lock().await.is_some()
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
             let variant = self.signing_variant(dialect).await;
-            if !Self::verify_with_variant(&buf, key, dialect, preauth.as_deref(), variant) {
-                // The pinned (or predicted) combination did not validate. Probe
-                // every other candidate against this exact packet before treating
-                // it as a failure: Windows Server 2022 build 20348 and Server 2025
-                // both announce AES-128-GCM yet sign with AES-CMAC, so the cipher
-                // alone is not a reliable predictor.
-                let winner = SigningVariant::ALL.into_iter().find(|&cand| {
-                    cand != variant
-                        && Self::verify_with_variant(&buf, key, dialect, preauth.as_deref(), cand)
-                });
+            let key = self.session_key.lock().await.clone().unwrap_or_default();
 
-                if let Some(found) = winner {
-                    *self.signing_variant.lock().await = Some(found);
-                    self.signing_failures
-                        .store(0, std::sync::atomic::Ordering::Relaxed);
-                    debug!(
-                        "SMB2: signing algorithm auto-detected as {} (dialect=0x{:04X}, \
-                         cipher={}); pinned for this session",
-                        found.name(),
+            if !Self::verify_with_variant(&buf, &key, dialect, preauth.as_deref(), variant, false)
+                && !self.probe_and_pin_signing_variant(&buf).await
+            {
+                let failures = self
+                    .signing_failures
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                    + 1;
+                if failures >= SIGNING_FAILURE_THRESHOLD {
+                    warn!(
+                        "SMB2: {} consecutive signing failures -- no candidate variant \
+                         validates. Verification is disabled for this session \
+                         (dialect=0x{:04X}, cipher={}); unverifiable responses are still \
+                         parsed. Run `ovt smb sign-diag` and compare the derived keys \
+                         against a known-good client.",
+                        failures,
                         dialect,
                         self.negotiated_cipher().name()
                     );
                 } else {
-                    let failures = self
-                        .signing_failures
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                        + 1;
-                    if failures >= SIGNING_FAILURE_THRESHOLD {
-                        warn!(
-                            "SMB2: {} consecutive signing failures -- no candidate variant \
-                             validates. Disabling signature verification for this session \
-                             (dialect=0x{:04X}, cipher={}). Run `ovt smb sign-diag` and compare \
-                             the derived keys against a known-good client.",
-                            failures,
-                            dialect,
-                            self.negotiated_cipher().name()
-                        );
-                    } else {
-                        warn!(
-                            "SMB2: Signing verification failed with every candidate variant \
-                             ({}/{}), continuing",
-                            failures, SIGNING_FAILURE_THRESHOLD
-                        );
-                    }
+                    warn!(
+                        "SMB2: signing verification failed for {} (len={}, dialect=0x{:04X}, \
+                         cipher={}) with every candidate variant ({}/{}), continuing",
+                        packet_command(&buf),
+                        buf.len(),
+                        dialect,
+                        self.negotiated_cipher().name(),
+                        failures,
+                        SIGNING_FAILURE_THRESHOLD
+                    );
                 }
             }
         }
@@ -782,9 +849,123 @@ impl Smb2Connection {
         dialect: u16,
         preauth: Option<&[u8]>,
         variant: SigningVariant,
+        quiet: bool,
     ) -> bool {
         let (ctx, gmac) = Self::variant_params(variant, preauth);
-        Self::verify_packet(pkt, session_key, dialect, true, ctx, gmac)
+        Self::verify_packet(pkt, session_key, dialect, true, ctx, gmac, quiet)
+    }
+
+    /// Probe every candidate signing variant against `pkt` and pin the one that
+    /// validates, rotating away from a stale pin if the peer changed its mind.
+    ///
+    /// Returns `true` when some candidate validated, meaning the session now has
+    /// a signing variant that matches the peer. Returns `false` for an unsigned
+    /// or unverifiable packet -- the caller decides whether that is worth a
+    /// warning.
+    ///
+    /// This is the single place that decides *which* derivation the session uses.
+    /// It is called with the server's final SESSION_SETUP response (which MS-SMB2
+    /// requires Windows to sign on SMB 3.1.1) so the very first signed request is
+    /// already using the right algorithm, and again on any later response whose
+    /// signature we could not validate.
+    async fn probe_and_pin_signing_variant(&self, pkt: &[u8]) -> bool {
+        let dialect = self.dialect.load(Ordering::Relaxed);
+        if dialect < SMB2_DIALECT_300 || pkt.len() < SMB2_HEADER_SIZE {
+            return false;
+        }
+        let flags = u32::from_le_bytes([pkt[16], pkt[17], pkt[18], pkt[19]]);
+        if flags & SMB2_FLAGS_SIGNED == 0 {
+            return false;
+        }
+        let key = self.session_key.lock().await.clone().unwrap_or_default();
+        if key.is_empty() {
+            return false;
+        }
+        let preauth = self.preauth_hash.lock().await.clone();
+        let current = *self.signing_variant.lock().await;
+        let preferred = current.unwrap_or_else(|| self.predicted_signing_variant(dialect));
+
+        // The pinned (or cipher-predicted) variant first, then every other
+        // candidate: Windows Server 2022 build 20348 and Server 2025 have both
+        // been observed announcing AES-128-GCM while signing with AES-CMAC, so
+        // the cipher alone is not a reliable predictor.
+        for cand in variant_probe_order(preferred) {
+            if Self::verify_with_variant(pkt, &key, dialect, preauth.as_deref(), cand, true) {
+                if current != Some(cand) {
+                    *self.signing_variant.lock().await = Some(cand);
+                    debug!(
+                        "SMB2: signing algorithm pinned as {} (dialect=0x{:04X}, cipher={})",
+                        cand.name(),
+                        dialect,
+                        self.negotiated_cipher().name()
+                    );
+                }
+                self.signing_failures.store(0, Ordering::Relaxed);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Pin the session's signing variant from the final SESSION_SETUP response.
+    ///
+    /// MS-SMB2 §3.2.5.3.1 requires Windows to set `SMB2_FLAGS_SIGNED` on the final
+    /// SESSION_SETUP response of an SMB 3.1.1 session, and that signature uses the
+    /// signing key derived from the pre-auth hash *before* this response. Checking
+    /// it here pins the correct algorithm before we have sent a single signed
+    /// request, instead of relying on a rejected request and a retry.
+    /// Post-process the final SESSION_SETUP response: record `SessionFlags`, pin
+    /// the signing variant against the server's own signature, and enable SMB3
+    /// encryption when the server supports it.
+    async fn finish_session_setup(&self, resp: &[u8], authenticated: bool) {
+        if resp.len() >= SMB2_HEADER_SIZE + 4 {
+            let flags =
+                u16::from_le_bytes([resp[SMB2_HEADER_SIZE + 2], resp[SMB2_HEADER_SIZE + 3]]);
+            self.session_flags.store(flags as u32, Ordering::Relaxed);
+            debug!("SMB2: SessionFlags=0x{flags:04X}");
+        }
+        self.pin_signing_from_session_setup(resp).await;
+        if let Err(e) = self.maybe_enable_encryption(authenticated).await {
+            warn!("SMB3: could not enable encryption for this session: {e}");
+        }
+    }
+
+    async fn pin_signing_from_session_setup(&self, resp: &[u8]) {
+        if !self.sign_required.load(Ordering::Relaxed) {
+            return;
+        }
+        if self.probe_and_pin_signing_variant(resp).await {
+            return;
+        }
+        let signed = resp.len() >= SMB2_HEADER_SIZE
+            && u32::from_le_bytes([resp[16], resp[17], resp[18], resp[19]]) & SMB2_FLAGS_SIGNED
+                != 0;
+        if signed {
+            warn!(
+                "SMB2: the server signed its SESSION_SETUP response, but none of the \
+                 candidate signing derivations reproduce that signature. The first signed \
+                 request will be retried across every candidate; run `ovt smb sign-diag` to \
+                 compare the derived keys against a known-good client."
+            );
+        } else {
+            debug!(
+                "SMB2: final SESSION_SETUP response is unsigned; the signing variant will be \
+                 pinned from the first signed response"
+            );
+        }
+    }
+
+    /// The order in which signing variants are attempted for an *outgoing*
+    /// request: the pinned variant first (or the cipher-predicted one while the
+    /// session is still unpinned), then every other candidate.
+    async fn signing_candidate_order(&self, dialect: u16) -> Vec<SigningVariant> {
+        let first = self.signing_variant(dialect).await;
+        if dialect < SMB2_DIALECT_300 {
+            // SMB 2.x signs with HMAC-SHA256 over the session key: there is no
+            // KDF variant to walk.
+            return vec![first];
+        }
+        variant_probe_order(first).to_vec()
     }
 
     /// Snapshot every input and output of the SMB 3.x signing-key derivation.
@@ -925,6 +1106,10 @@ impl Smb2Connection {
     /// Verify an SMB2/3 packet signature (MS-SMB2 §3.1.4.1).
     /// Returns true if the signature is valid or if signing is not enabled.
     /// `preauth_hash` is the Session.PreauthIntegrityHashValue for SMB 3.1.1 (used as KDF context).
+    ///
+    /// `quiet` is set while *probing* candidate variants: a candidate that does
+    /// not match is the expected outcome there, so the mismatch is logged at
+    /// debug instead of warning about a packet that is about to verify fine.
     fn verify_packet(
         pkt: &[u8],
         session_key: &[u8],
@@ -932,6 +1117,7 @@ impl Smb2Connection {
         sign_required: bool,
         preauth_hash: Option<&[u8]>,
         gmac: bool,
+        quiet: bool,
     ) -> bool {
         if pkt.len() < SMB2_HEADER_SIZE {
             return !sign_required;
@@ -960,11 +1146,20 @@ impl Smb2Connection {
             };
 
         if claimed_sig != expected_sig {
-            warn!(
-                "SMB2 signature mismatch! claimed={:02x?}, expected={:02x?}, dialect=0x{:04X}, \
-                   gmac={gmac}",
-                claimed_sig, expected_sig, dialect
-            );
+            if quiet {
+                debug!(
+                    "SMB2: {} does not match the probed variant (dialect=0x{dialect:04X}, \
+                     gmac={gmac})",
+                    packet_command(pkt)
+                );
+            } else {
+                warn!(
+                    "SMB2 signature mismatch on {} (len={}, dialect=0x{dialect:04X}, gmac={gmac}): \
+                     claimed={claimed_sig:02x?}, expected={expected_sig:02x?}",
+                    packet_command(pkt),
+                    pkt.len()
+                );
+            }
             return false;
         }
 
@@ -1012,6 +1207,16 @@ impl Smb2Connection {
     /// Send a packet, signing it first if signing is required and a session key is available.
     /// When SMB3 encryption is active, signing occurs on the plaintext before encryption wrapping.
     async fn send_signed(&self, pkt: &mut [u8]) -> Result<()> {
+        let dialect = self.dialect.load(Ordering::Relaxed);
+        let variant = self.signing_variant(dialect).await;
+        self.send_signed_with(pkt, variant).await
+    }
+
+    /// Sign `pkt` with one specific variant and send it.
+    ///
+    /// Used by [`Self::tree_connect`] to walk the candidate list when the
+    /// session is not pinned yet and the peer rejected our first signature.
+    async fn send_signed_with(&self, pkt: &mut [u8], variant: SigningVariant) -> Result<()> {
         if self
             .sign_required
             .load(std::sync::atomic::Ordering::Relaxed)
@@ -1019,7 +1224,6 @@ impl Smb2Connection {
         {
             let dialect = self.dialect.load(Ordering::Relaxed);
             let preauth = self.preauth_hash.lock().await.clone();
-            let variant = self.signing_variant(dialect).await;
             let (ctx, gmac) = Self::variant_params(variant, preauth.as_deref());
             Self::sign_packet(pkt, key, dialect, ctx, gmac)?;
         }
@@ -1256,6 +1460,15 @@ impl Smb2Connection {
         self.max_transact_size
             .store(max_transact, Ordering::Relaxed);
 
+        // Capabilities (offset 24): SMB2_GLOBAL_CAP_ENCRYPTION tells us the server
+        // is willing to encrypt this session, which is what
+        // `maybe_enable_encryption` needs to know.
+        let server_capabilities = u32::from_le_bytes([body[24], body[25], body[26], body[27]]);
+        if server_capabilities & SMB2_GLOBAL_CAP_ENCRYPTION != 0 {
+            self.encryption_supported.store(true, Ordering::Relaxed);
+            debug!("SMB2: Server supports SMB3 encryption");
+        }
+
         // Store max_read and max_write (currently hardcoded to 65536, override with server values)
         // Note: max_read_size and max_write_size are not atomic; they're set once here.
 
@@ -1322,6 +1535,11 @@ impl Smb2Connection {
                     if ctx_data.len() >= 4 {
                         let cipher_id = u16::from_le_bytes([ctx_data[2], ctx_data[3]]);
                         self.cipher_id.store(cipher_id, Ordering::Relaxed);
+                        if cipher_id != 0 {
+                            // A negotiated cipher also implies the server can
+                            // encrypt, even if the capabilities bit was clear.
+                            self.encryption_supported.store(true, Ordering::Relaxed);
+                        }
                         // We only advertise AES-128-CCM and AES-128-GCM, so the server
                         // must pick one of those. Anything else means the response is
                         // malformed or the server ignored our preference list -- say so
@@ -1548,6 +1766,8 @@ impl Smb2Connection {
         }
 
         *self.session_key.lock().await = Some(session_key.clone());
+        self.finish_session_setup(&raw_resp, !username.is_empty())
+            .await;
 
         // DO NOT verify the session setup leg 2 response signature!
         //
@@ -1701,6 +1921,8 @@ impl Smb2Connection {
         }
 
         *self.session_key.lock().await = Some(session_key.clone());
+        self.finish_session_setup(&raw_resp, !username.is_empty())
+            .await;
 
         // DO NOT verify the session setup leg 2 response signature -- see comment
         // in session_setup() above. The server sends an unsigned transition packet.
@@ -1784,6 +2006,7 @@ impl Smb2Connection {
         ]);
         *self.session_id.lock().await = session_id;
         debug!("SMB2: Kerberos session ID 0x{session_id:016X}");
+        self.finish_session_setup(&raw_resp, true).await;
 
         // DO NOT verify the session setup response signature -- see comment
         // in session_setup() above. The server sends an unsigned transition packet.
@@ -1797,6 +2020,71 @@ impl Smb2Connection {
     pub async fn tree_connect(&self, share_path: &str) -> Result<u32> {
         debug!("SMB2: Tree connect to {share_path}");
 
+        let dialect = self.dialect.load(Ordering::Relaxed);
+        let pinned_before = *self.signing_variant.lock().await;
+
+        // While the signing variant has not been confirmed against this peer, the
+        // very first signed request may be signed with a key the server does not
+        // agree on. Windows answers a signature it cannot verify with
+        // STATUS_ACCESS_DENIED and drops the request -- which is indistinguishable
+        // from a genuine share-permission denial on the wire. TREE_CONNECT is
+        // idempotent, so walk the remaining candidates instead of giving up: this
+        // is what makes 3.1.1 sessions work on builds whose signing derivation
+        // differs from the one the negotiated cipher predicts.
+        let attempts = if self.sign_required.load(Ordering::Relaxed) && pinned_before.is_none() {
+            self.signing_candidate_order(dialect).await
+        } else {
+            vec![self.signing_variant(dialect).await]
+        };
+
+        let mut last_status = STATUS_ACCESS_DENIED;
+        for (attempt, variant) in attempts.iter().enumerate() {
+            let mut pkt = self.build_tree_connect_request(share_path).await;
+            self.send_signed_with(&mut pkt, *variant).await?;
+            // `recv_verified` re-probes and pins the variant when the response
+            // carries a signature we can validate, so a retry usually already
+            // uses the pinned (correct) variant.
+            let resp = self.recv_verified().await?;
+
+            if resp.len() < SMB2_HEADER_SIZE + 8 {
+                return Err(OverthroneError::Smb(format!(
+                    "SMB2 Tree connect response too short: {} bytes",
+                    resp.len()
+                )));
+            }
+
+            let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
+            if status == STATUS_SUCCESS {
+                let tree_id = u32::from_le_bytes([resp[36], resp[37], resp[38], resp[39]]);
+                *self.tree_id.lock().await = tree_id;
+                debug!("SMB2: Tree ID 0x{tree_id:08X} for {share_path}");
+                return Ok(tree_id);
+            }
+            last_status = status;
+
+            let retry = attempt + 1 < attempts.len() && status == STATUS_ACCESS_DENIED;
+            if !retry {
+                break;
+            }
+            debug!(
+                "SMB2: tree connect to {share_path} answered 0x{status:08X}; retrying with {}",
+                attempts[attempt + 1].name()
+            );
+        }
+
+        debug!(
+            "SMB2: tree connect to {share_path} failed: 0x{last_status:08X} ({}), \
+             candidates tried={}",
+            ntstatus_to_name(last_status),
+            attempts.len()
+        );
+        Err(OverthroneError::Smb(format!(
+            "SMB2 Tree connect to {share_path} failed: 0x{last_status:08X}"
+        )))
+    }
+
+    /// Build an SMB2 TREE_CONNECT request packet for `share_path`.
+    async fn build_tree_connect_request(&self, share_path: &str) -> Vec<u8> {
         let hdr = self.build_header(SMB2_TREE_CONNECT, 0).await;
         let path_utf16: Vec<u8> = share_path
             .encode_utf16()
@@ -1818,20 +2106,7 @@ impl Smb2Connection {
 
         let mut pkt = hdr;
         pkt.extend_from_slice(&body);
-        self.send_signed(&mut pkt).await?;
-        let resp = self.recv_verified().await?;
-
-        let status = u32::from_le_bytes([resp[8], resp[9], resp[10], resp[11]]);
-        if status != STATUS_SUCCESS {
-            return Err(OverthroneError::Smb(format!(
-                "SMB2 Tree connect to {share_path} failed: 0x{status:08X}"
-            )));
-        }
-
-        let tree_id = u32::from_le_bytes([resp[36], resp[37], resp[38], resp[39]]);
-        *self.tree_id.lock().await = tree_id;
-        debug!("SMB2: Tree ID 0x{tree_id:08X} for {share_path}");
-        Ok(tree_id)
+        pkt
     }
 
     /// Disconnect from the current tree.
@@ -2765,6 +3040,59 @@ impl Smb2Connection {
             dialect
         );
         Ok(())
+    }
+
+    /// Enable SMB3 encryption for the rest of the session when the *server* asks
+    /// for it, i.e. when its final SESSION_SETUP response set
+    /// `SMB2_SESSION_FLAG_ENCRYPT_DATA` (MS-SMB2 §2.2.6).
+    ///
+    /// Advertising `SMB2_GLOBAL_CAP_ENCRYPTION` in NEGOTIATE only tells the
+    /// server we *can* encrypt. A server that does not ask for it keeps
+    /// `Session.EncryptData` FALSE and keeps answering in plaintext, so
+    /// encrypting unilaterally would change the wire format of every later
+    /// request without satisfying the one case that needs it: a share with
+    /// `SMB2_SHAREFLAG_ENCRYPT_DATA`, whose TREE_CONNECT the server refuses with
+    /// `STATUS_ACCESS_DENIED` while `Session.EncryptData` is FALSE. Windows is
+    /// what flips the flag -- a host with an "encrypt SMB traffic" policy sets it
+    /// -- and that is the case this handles. Verified live: a Server 2022 DC
+    /// answers `SessionFlags=0x0000`, so OVT stays in plaintext there and matches
+    /// `smbclient`/`netexec`, which do the same.
+    async fn maybe_enable_encryption(&self, authenticated: bool) -> Result<()> {
+        let dialect = self.dialect.load(Ordering::Relaxed);
+        if dialect < SMB2_DIALECT_300 {
+            return Ok(());
+        }
+        let session_flags = self.session_flags.load(Ordering::Relaxed) as u16;
+        if session_flags & SMB2_SESSION_FLAG_ENCRYPT_DATA == 0 {
+            debug!(
+                "SMB3: server did not require encryption (SessionFlags=0x{session_flags:04X}) -- \
+                 staying in plaintext"
+            );
+            return Ok(());
+        }
+        if self.encryption_required.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // Encryption needs a session key, so a guest or anonymous session cannot
+        // comply -- and the spec forbids it.
+        if !authenticated
+            || session_flags & (SMB2_SESSION_FLAG_IS_GUEST | SMB2_SESSION_FLAG_IS_NULL) != 0
+        {
+            warn!(
+                "SMB3: server requires encryption (SessionFlags=0x{session_flags:04X}) but this is \
+                 a guest/anonymous session; requests will be refused"
+            );
+            return Ok(());
+        }
+        if !self.encryption_supported.load(Ordering::Relaxed) {
+            warn!(
+                "SMB3: server requires encryption but advertised no usable cipher; enabling with \
+                 {}",
+                self.negotiated_cipher().name()
+            );
+        }
+        debug!("SMB3: server requires encryption for this session");
+        self.enable_encryption().await
     }
 
     /// Check whether SMB3 encryption is currently active.
@@ -4618,6 +4946,7 @@ mod tests {
             SMB2_DIALECT_311,
             true,
             Some(&preauth),
+            true,
             true
         ));
         assert!(Smb2Connection::verify_packet(
@@ -4626,7 +4955,8 @@ mod tests {
             SMB2_DIALECT_311,
             true,
             Some(&preauth),
-            false
+            false,
+            true
         ));
         // Verifying with the wrong algorithm must fail.
         assert!(!Smb2Connection::verify_packet(
@@ -4635,7 +4965,8 @@ mod tests {
             SMB2_DIALECT_311,
             true,
             Some(&preauth),
-            false
+            false,
+            true
         ));
     }
 
@@ -4651,8 +4982,86 @@ mod tests {
             SMB2_DIALECT_302,
             true,
             None,
-            false
+            false,
+            true
         ));
+    }
+
+    /// The 3.1.1 "SmbSign" probe candidate must use the 3.0.x label/context pair.
+    ///
+    /// It previously paired the `SMBSigningKey` label with a `SmbSign` context,
+    /// which neither Windows nor Impacket ever derives -- so the candidate could
+    /// never validate and a session that really uses the 3.0.x derivation (which
+    /// Server 2022 build 20348 and Server 2025 have been observed doing while
+    /// announcing AES-128-GCM) looked unverifiable.
+    #[test]
+    fn test_smbsign_candidate_uses_smb2aescmac_label() {
+        let session_key = [0x5Au8; 16];
+        let expected = sp800_108_counter_kdf(&session_key, b"SMB2AESCMAC\x00", b"SmbSign\x00");
+        let derived = derive_signing_key(&session_key, SMB2_DIALECT_311, None);
+        assert_eq!(&derived[..], &expected[..16]);
+
+        let mismatched = sp800_108_counter_kdf(&session_key, b"SMBSigningKey\x00", b"SmbSign\x00");
+        assert_ne!(&derived[..], &mismatched[..16]);
+    }
+
+    /// SMB 3.0/3.0.2 has no pre-auth hash, so its derivation is a pure function
+    /// of the session key -- a 3.1.1 session pinned to that candidate must
+    /// therefore sign and verify across both dialects.
+    #[test]
+    fn test_smbsign_variant_is_dialect_agnostic() {
+        let session_key = [0x11u8; 16];
+        let mut pkt = synthetic_header(SMB2_TREE_CONNECT, 3, 0);
+        Smb2Connection::sign_packet(&mut pkt, &session_key, SMB2_DIALECT_311, None, false).unwrap();
+        assert!(Smb2Connection::verify_packet(
+            &pkt,
+            &session_key,
+            SMB2_DIALECT_302,
+            true,
+            None,
+            false,
+            true
+        ));
+    }
+
+    /// The pre-auth-hash candidate and the 3.0.x candidate are different keys, so
+    /// probing one must not accidentally validate the other.
+    #[test]
+    fn test_preauth_and_smbsign_candidates_are_distinct() {
+        let session_key = [0x33u8; 16];
+        let preauth = [0x44u8; 64];
+        assert_ne!(
+            derive_signing_key(&session_key, SMB2_DIALECT_311, Some(&preauth)),
+            derive_signing_key(&session_key, SMB2_DIALECT_311, None)
+        );
+
+        let mut pkt = synthetic_header(SMB2_TREE_CONNECT, 9, 0);
+        Smb2Connection::sign_packet(&mut pkt, &session_key, SMB2_DIALECT_311, None, false).unwrap();
+        assert!(!Smb2Connection::verify_packet(
+            &pkt,
+            &session_key,
+            SMB2_DIALECT_311,
+            true,
+            Some(&preauth),
+            false,
+            true
+        ));
+    }
+
+    /// The probe order starts from the pinned/predicted variant but always keeps
+    /// the other three, which is what lets a rejected request be retried.
+    #[test]
+    fn test_variant_probe_order_starts_with_preferred_and_keeps_all() {
+        for preferred in SigningVariant::ALL {
+            let order = variant_probe_order(preferred);
+            assert_eq!(order[0], preferred);
+            let mut seen = Vec::new();
+            for v in order {
+                assert!(!seen.contains(&v), "{v:?} appears twice");
+                seen.push(v);
+            }
+            assert_eq!(seen.len(), SigningVariant::ALL.len());
+        }
     }
 
     #[test]

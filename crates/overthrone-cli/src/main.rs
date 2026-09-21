@@ -7924,37 +7924,50 @@ async fn cmd_smb(cli: &Cli, action: SmbAction) -> i32 {
                     return 1;
                 }
             };
-            // Enumerate all shares via SRVSVC NetShareEnumAll, then check access
+            // Enumerate shares for real through SRVSVC NetShareEnumAll and
+            // report the server's own type and remark for each one, then verify
+            // read and write access with a tree connect and a write probe --
+            // the same columns `smbclient -L` and `netexec smb --shares` show.
             let shares = smb.enumerate_accessible_shares().await;
+            if shares.iter().any(|s| !s.enumerated) {
+                banner::print_warn(&format!(
+                    "SRVSVC share enumeration on {} was unavailable; the rows below are \
+                     well-known share names probed with a real tree connect, not a server \
+                     enumeration",
+                    target
+                ));
+            }
             println!(
-                "\n {:<25} {:<8} {:<8} {}",
+                "\n {:<22} {:<7} {:<13} {}",
                 "Share".bold(),
                 "Type".bold(),
-                "Read".bold(),
-                "Write".bold()
+                "Permissions".bold(),
+                "Remark".bold()
             );
-            println!(" {}", "-".repeat(55));
+            println!(" {}", "-".repeat(76));
             for s in &shares {
-                let read = if s.readable {
-                    "[+]".green().to_string()
-                } else {
-                    "[-]".red().to_string()
+                // Pad before colouring: ANSI escapes would otherwise count as
+                // column width and push the following columns out of line.
+                let permissions = match (s.readable, s.writable) {
+                    (_, true) => format!("{:<13}", "READ,WRITE").green(),
+                    (true, false) => format!("{:<13}", "READ").green(),
+                    (false, false) => format!("{:<13}", "-").red(),
                 };
-                let write = if s.writable {
-                    "[+]".green().to_string()
+                // `share_type` is the real `SHARE_INFO_1` type from SRVSVC
+                // (Disk/IPC/Print/Device); `*` marks an administrative share.
+                let share_type = format!(
+                    "{}{}",
+                    s.share_type,
+                    if s.is_admin_share { "*" } else { "" }
+                );
+                let remark = if s.remark.is_empty() {
+                    "-".dimmed().to_string()
                 } else {
-                    "[-]".red().to_string()
-                };
-                let share_type = if s.is_admin_share {
-                    "Admin"
-                } else if s.share_name == "IPC$" {
-                    "IPC"
-                } else {
-                    "Disk"
+                    s.remark.clone()
                 };
                 println!(
-                    " {:<25} {:<8} {:<8} {}",
-                    s.share_name, share_type, read, write
+                    " {:<22} {:<7} {:<13} {}",
+                    s.share_name, share_type, permissions, remark
                 );
             }
             banner::print_success(&format!(

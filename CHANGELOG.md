@@ -44,6 +44,52 @@ after three failures -- which silently gave up on integrity instead of fixing it
   (`KDF_CounterMode(exported_session_key, b"SMBSigningKey\x00", preauth_hash, 128)`).
   This is the capture-comparison workflow the signing investigation needed.
 
+### `ovt smb shares` reports what the server actually advertises
+
+The table was built from a hard-coded list whenever SRVSVC enumeration failed,
+which is why a Server 2022 DC answered `3 shares found, 0 readable` -- the three
+administrative shares OVT guessed -- while the server advertises five. Both
+causes of the enumeration failure are fixed:
+
+- **The signing key derivation.** A 3.1.1 session with no pre-auth hash derived
+  its signing key from the `SMBSigningKey` label paired with a `SmbSign`
+  context. No implementation derives that pair, so every signed request was
+  rejected with `STATUS_ACCESS_DENIED`, the `IPC$` tree connect failed and the
+  `srvsvc` enumeration with it. `derive_signing_key` now uses the 3.1.1
+  label/context pair or the 3.0.x one, never a mixture.
+- **Where the variant is pinned.** It is now pinned from the server's own signed
+  `SESSION_SETUP` response, before the first request goes out, and `TREE_CONNECT`
+  walks the remaining candidates when the server answers `STATUS_ACCESS_DENIED`
+  -- a rejected signature is indistinguishable from a share-permission denial on
+  the wire. Probing a candidate logs at debug, so a session that pins correctly
+  prints no alarming warnings.
+
+With enumeration working, the table carries only server-reported data:
+
+- New `ShareInfo` holds the SRVSVC `SHARE_INFO_1` the server returned -- name,
+  `shi1_type` and `shi1_remark` -- so `ovt smb shares` prints a real `Type`
+  (`Disk`/`IPC`/`Print`/`Device`, the label `smbclient -L` uses) and a real
+  `Remark` (`Remote Admin`, `Default share`, `Logon server share`, ...), the
+  same three columns `netexec smb --shares` prints.
+- `Permissions` is `READ,WRITE` / `READ` / `-`, from a real tree connect plus a
+  write probe. The probe now deletes the file it creates, so checking a writable
+  share no longer leaves `__overthrone_test_*.tmp` behind.
+- A row that did not come from an enumeration is marked
+  `ShareAccessResult::enumerated == false`, and the CLI says so explicitly: the
+  well-known share list is only probed when enumeration is unavailable, and it is
+  never presented as the server's own answer.
+- **SMB3 encryption is enabled only when the server asks for it.** MS-SMB2 §2.2.6:
+  a host with an "encrypt SMB traffic" policy sets `SMB2_SESSION_FLAG_ENCRYPT_DATA`
+  in its final `SESSION_SETUP` response, and the session then encrypts with the
+  3.1.1 `SMBC2SCipherKey`/`SMBS2CCipherKey` derivations (or the 3.0.x
+  `SMB2AESCCM` + `ServerIn `/`ServerOut` contexts). OVT advertised the capability
+  but never used it; it now honours the flag and otherwise stays in plaintext,
+  like `smbclient` and NetExec.
+- Live-verified against the Server 2022 build 20348 DC (`LAINOSCP.local`, SMB
+  3.1.1, signing required, AES-128-GCM cipher): five shares enumerated with their
+  real types and remarks, and `ADMIN$`/`C$` correctly report no access for a
+  non-administrative user -- which the host's own SMB client confirms.
+
 ### Priority-3 completeness
 
 - **Removed dead duplicate modules.** `crates/overthrone-cli/src/commands/enum_commands/`
@@ -76,7 +122,9 @@ after three failures -- which silently gave up on integrity instead of fixing it
   `FILE_RENAME_INFORMATION` layout; 5 new tests for the `smbclient` shell's path
   normalisation, wildcard matcher and tokenizer; 4 new tests for the SAMR
   create/delete builders.
-- 1,214 core tests and 201 CLI tests pass.
+- 1,223 core library tests and 201 CLI tests pass.
+- `ovt smb shares` live-tested against a Server 2022 DC, including the
+  `SHARE_INFO_1` type/remark parsing and the probed-share marker.
 
 ## v0.4.7 (2026-09-17)
 

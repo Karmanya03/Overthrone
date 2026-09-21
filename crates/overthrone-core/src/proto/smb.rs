@@ -8,7 +8,7 @@ use md5::Md5;
 #[allow(dead_code)] // Used in NTLM operations
 type HmacMd5 = Hmac<Md5>;
 use crate::error::{OverthroneError, Result};
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 
 // Windows-only imports
 
@@ -23,6 +23,116 @@ use std::str::FromStr;
 // Constants
 pub const SMB_PORT: u16 = 445;
 pub const ADMIN_SHARES: &[&str] = &["C$", "ADMIN$", "IPC$"];
+
+// SRVSVC `SHARE_INFO_1.shi1_type` values (MS-SRVS §2.2.2.1).
+const STYPE_DISKTREE: u32 = 0x0000_0000;
+const STYPE_PRINTQ: u32 = 0x0000_0001;
+const STYPE_DEVICE: u32 = 0x0000_0002;
+const STYPE_IPC: u32 = 0x0000_0003;
+/// `STYPE_SPECIAL` -- set on administrative shares (`C$`, `ADMIN$`, `IPC$`,
+/// `SYSVOL`, `NETLOGON`, ...). Independent of the type bits above.
+const STYPE_SPECIAL: u32 = 0x8000_0000;
+
+/// Shares that every Windows file server exposes -- used **only** as a probe
+/// list, never as the answer.
+///
+/// [`SmbSession::enumerate_accessible_shares`] enumerates shares for real through
+/// SRVSVC `NetShareEnumAll`. That is what makes `ovt smb shares` agree with
+/// `netexec smb --shares` and `smbclient -L`; a baked-in list is what previously
+/// made OVT report three shares where the server advertises six.
+///
+/// This list covers the case where enumeration itself is unavailable -- a host
+/// that restricts the `srvsvc` pipe, or one that refuses the `IPC$` tree connect
+/// -- so the caller still gets *verified* access results instead of an empty
+/// table. Rows produced from it carry `ShareAccessResult::enumerated == false`,
+/// so nothing can mistake a probed name for a share the server advertised.
+pub const KNOWN_SHARES: &[(&str, u32)] = &[
+    ("C$", STYPE_DISKTREE | STYPE_SPECIAL),
+    ("ADMIN$", STYPE_DISKTREE | STYPE_SPECIAL),
+    ("IPC$", STYPE_IPC | STYPE_SPECIAL),
+    ("SYSVOL", STYPE_DISKTREE | STYPE_SPECIAL),
+    ("NETLOGON", STYPE_DISKTREE | STYPE_SPECIAL),
+];
+
+/// Render a `SHARE_INFO_1` type the way `netexec smb --shares` does.
+pub fn share_type_label(share_type: u32) -> &'static str {
+    match share_type & 0xFF {
+        STYPE_PRINTQ => "Print",
+        STYPE_DEVICE => "Device",
+        STYPE_IPC => "IPC",
+        _ => "Disk",
+    }
+}
+
+/// One share as advertised by SRVSVC `NetShareEnumAll` (`SHARE_INFO_1`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShareInfo {
+    /// Share name, e.g. `SYSVOL`.
+    pub name: String,
+    /// Raw `shi1_type` bits -- see the `STYPE_*` constants above.
+    pub share_type: u32,
+    /// `shi1_remark`: the comment the server reports for the share (`Remote
+    /// Admin`, `Default share`, `Logon server share`, ...). Empty when the
+    /// server sent no remark.
+    pub remark: String,
+}
+
+impl ShareInfo {
+    /// `Disk` / `IPC` / `Print` / `Device` -- the label `smbclient -L` prints in
+    /// its `Type` column, derived from the server's own `shi1_type`.
+    pub fn type_label(&self) -> &'static str {
+        share_type_label(self.share_type)
+    }
+
+    /// `true` when the share carries `STYPE_SPECIAL`, i.e. the server flags it as
+    /// an administrative/system share (`C$`, `ADMIN$`, `IPC$`, `SYSVOL`, ...).
+    pub fn is_special(&self) -> bool {
+        self.share_type & STYPE_SPECIAL != 0
+    }
+
+    /// `true` for `IPC$`-style shares, which have no file system to write to.
+    pub fn is_ipc(&self) -> bool {
+        self.share_type & 0xFF == STYPE_IPC
+    }
+}
+
+/// Build a [`ShareAccessResult`] for a share that was named explicitly instead of
+/// enumerated, so no server-supplied type or remark is available for it.
+fn probed_share_result(share: &str, readable: bool, writable: bool) -> ShareAccessResult {
+    ShareAccessResult {
+        share_name: share.to_string(),
+        readable,
+        writable,
+        is_admin_share: ADMIN_SHARES.contains(&share),
+        share_type: inferred_share_type(share).to_string(),
+        remark: String::new(),
+        enumerated: false,
+    }
+}
+
+/// Best-effort type for a share we were only handed by name (no SRVSVC metadata).
+fn inferred_share_type(name: &str) -> &'static str {
+    if name.eq_ignore_ascii_case("IPC$") {
+        "IPC"
+    } else {
+        "Disk"
+    }
+}
+
+/// The [`KNOWN_SHARES`] probe list as owned [`ShareInfo`]s.
+///
+/// They carry no remark because the server never described them -- they were
+/// probed by name, not enumerated.
+fn known_shares_info() -> Vec<ShareInfo> {
+    KNOWN_SHARES
+        .iter()
+        .map(|(name, share_type)| ShareInfo {
+            name: (*name).to_string(),
+            share_type: *share_type,
+            remark: String::new(),
+        })
+        .collect()
+}
 #[cfg(windows)]
 const READ_BUF_SIZE: usize = 1_048_576; // 1 MiB -- large enough for DCSync/Kerberos responses
 
@@ -224,6 +334,15 @@ pub struct ShareAccessResult {
     pub writable: bool,
     /// is admin share field
     pub is_admin_share: bool,
+    /// `SHARE_INFO_1` type rendered like `smbclient -L` / `netexec --shares`
+    /// (`Disk` / `IPC` / `Print` / `Device`).
+    pub share_type: String,
+    /// The server's `shi1_remark` for this share (`Remote Admin`, `Default
+    /// share`, ...). Empty for a probed share or when the server sent none.
+    pub remark: String,
+    /// `true` when this row came from a real SRVSVC enumeration, `false` when it
+    /// is a probe of a well-known name because enumeration was unavailable.
+    pub enumerated: bool,
 }
 /// Data structure used by this module.
 #[derive(Debug, Clone)]
@@ -497,18 +616,15 @@ impl SmbSession {
     pub async fn check_share_access(&self, shares: &[&str]) -> Vec<ShareAccessResult> {
         let mut results = Vec::new();
         for &share in shares {
+            // `IPC$` has no file system behind it, so probing it for write
+            // access is meaningless (NetExec reports `READ` for it as well).
             let readable = self.check_share_read(share).await;
-            let writable = if readable && share != "IPC$" {
+            let writable = if readable && !share.eq_ignore_ascii_case("IPC$") {
                 self.check_share_write(share).await
             } else {
                 false
             };
-            results.push(ShareAccessResult {
-                share_name: share.to_string(),
-                readable,
-                writable,
-                is_admin_share: ADMIN_SHARES.contains(&share),
-            });
+            results.push(probed_share_result(share, readable, writable));
         }
         results
     }
@@ -1483,6 +1599,18 @@ impl SmbSession {
 
     /// Enumerate all shares on the target via SRVSVC NetShareEnumAll (opnum 15).
     pub async fn list_shares(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_shares_typed()
+            .await?
+            .into_iter()
+            .map(|info| info.name)
+            .collect())
+    }
+
+    /// [`Self::list_shares`] with each share's `SHARE_INFO_1` type and remark
+    /// preserved, so callers can report the same `Disk`/`IPC` label and comment
+    /// `smbclient -L` and `netexec smb --shares` print.
+    pub async fn list_shares_typed(&self) -> Result<Vec<ShareInfo>> {
         info!("SMB: Enumerating shares on {} via SRVSVC", self.target);
 
         // Use persistent pipe so the DCE/RPC binding survives across BIND + REQUEST.
@@ -1521,14 +1649,18 @@ impl SmbSession {
         debug!("SMB: SRVSVC NetShareEnumAll response: {} bytes", resp.len());
         let _ = self.close_pipe_persistent(&fid).await;
 
-        let names = parse_srvsvc_share_names(&resp);
+        let shares = parse_srvsvc_shares(&resp);
         info!(
             "SMB: Found {} share(s) on {}: [{}]",
-            names.len(),
+            shares.len(),
             self.target,
-            names.join(", ")
+            shares
+                .iter()
+                .map(|info| info.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
-        Ok(names)
+        Ok(shares)
     }
 
     /// Query the remote OS release via SRVSVC `NetrServerGetInfo` (opnum 21).
@@ -1555,18 +1687,50 @@ impl SmbSession {
 
     /// List all shares and return access results for each one.
     pub async fn enumerate_accessible_shares(&self) -> Vec<ShareAccessResult> {
-        let all_shares = match self.list_shares().await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(
-                    "SMB: list_shares on {} failed: {e} -- falling back to known shares",
+        let shares = match self.list_shares_typed().await {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => {
+                debug!(
+                    "SMB: SRVSVC on {} advertised no shares -- probing the well-known \
+                     administrative shares instead",
                     self.target
                 );
-                ADMIN_SHARES.iter().map(|s| s.to_string()).collect()
+                known_shares_info()
+            }
+            Err(e) => {
+                warn!(
+                    "SMB: SRVSVC enumeration on {} failed: {e} -- probing the well-known \
+                     administrative shares instead",
+                    self.target
+                );
+                known_shares_info()
             }
         };
-        let share_refs: Vec<&str> = all_shares.iter().map(String::as_str).collect();
-        self.check_share_access(&share_refs).await
+        self.check_share_access_typed(&shares).await
+    }
+
+    /// Like [`Self::check_share_access`] but keeps the `SHARE_INFO_1` type and
+    /// remark that came back from SRVSVC.
+    async fn check_share_access_typed(&self, shares: &[ShareInfo]) -> Vec<ShareAccessResult> {
+        let mut results = Vec::with_capacity(shares.len());
+        for info in shares {
+            let readable = self.check_share_read(&info.name).await;
+            let writable = if readable && !info.is_ipc() {
+                self.check_share_write(&info.name).await
+            } else {
+                false
+            };
+            results.push(ShareAccessResult {
+                share_name: info.name.clone(),
+                readable,
+                writable,
+                is_admin_share: ADMIN_SHARES.contains(&info.name.as_str()),
+                share_type: info.type_label().to_string(),
+                remark: info.remark.clone(),
+                enumerated: true,
+            });
+        }
+        results
     }
 }
 
@@ -2302,11 +2466,22 @@ impl SmbSession {
     pub async fn check_share_read(&self, share: &str) -> bool {
         let share_path = format!(r"\\{}\{}", self.target, share);
         let conn = self.inner.lock().await;
-        conn.tree_connect(&share_path).await.is_ok()
+        match conn.tree_connect(&share_path).await {
+            Ok(_) => {
+                debug!("SMB: Read access on \\\\{}\\{}", self.target, share);
+                true
+            }
+            Err(e) => {
+                debug!("SMB: No read access on \\\\{}\\{}: {e}", self.target, share);
+                false
+            }
+        }
     }
 
+    /// Probe write access the way NetExec does -- create something small, then
+    /// remove it -- so the share is left exactly as it was found.
     pub async fn check_share_write(&self, share: &str) -> bool {
-        if share == "IPC$" {
+        if share.eq_ignore_ascii_case("IPC$") {
             return false;
         }
         let share_path = format!(r"\\{}\{}", self.target, share);
@@ -2315,32 +2490,44 @@ impl SmbSession {
             Ok(id) => id,
             Err(_) => return false,
         };
-        let test_file = format!("__overthrone_test_{}.tmp", rand::random::<u32>());
+        let test_file = format!("__overthrone_test_{:08x}.tmp", rand::random::<u32>());
         match conn.open_file_write(&test_file).await {
             Ok(fid) => {
                 let _ = conn.write(&fid, 0, b"x").await;
                 let _ = conn.close(&fid).await;
+                // Clean up after the probe: a share reported as `READ,WRITE`
+                // must not be left holding a test file.
+                if let Err(e) = conn.delete_file(&test_file).await {
+                    debug!(
+                        "SMB: write probe on \\\\{}\\{} could not remove {}: {e}",
+                        self.target, share, test_file
+                    );
+                }
+                debug!("SMB: Write access on \\\\{}\\{}", self.target, share);
                 true
             }
-            Err(_) => false,
+            Err(e) => {
+                debug!(
+                    "SMB: No write access on \\\\{}\\{}: {e}",
+                    self.target, share
+                );
+                false
+            }
         }
     }
 
     pub async fn check_share_access(&self, shares: &[&str]) -> Vec<ShareAccessResult> {
         let mut results = Vec::new();
         for &share in shares {
+            // `IPC$` has no file system behind it, so probing it for write
+            // access is meaningless (NetExec reports `READ` for it as well).
             let readable = self.check_share_read(share).await;
-            let writable = if readable && share != "IPC$" {
+            let writable = if readable && !share.eq_ignore_ascii_case("IPC$") {
                 self.check_share_write(share).await
             } else {
                 false
             };
-            results.push(ShareAccessResult {
-                share_name: share.to_string(),
-                readable,
-                writable,
-                is_admin_share: ADMIN_SHARES.contains(&share),
-            });
+            results.push(probed_share_result(share, readable, writable));
         }
         results
     }
@@ -2868,6 +3055,18 @@ impl SmbSession {
 
     /// Enumerate all shares on the target via SRVSVC NetShareEnumAll (opnum 15).
     pub async fn list_shares(&self) -> Result<Vec<String>> {
+        Ok(self
+            .list_shares_typed()
+            .await?
+            .into_iter()
+            .map(|info| info.name)
+            .collect())
+    }
+
+    /// [`Self::list_shares`] with each share's `SHARE_INFO_1` type and remark
+    /// preserved, so callers can report the same `Disk`/`IPC` label and comment
+    /// `smbclient -L` and `netexec smb --shares` print.
+    pub async fn list_shares_typed(&self) -> Result<Vec<ShareInfo>> {
         info!("SMB: Enumerating shares on {} via SRVSVC", self.target);
 
         // Use persistent pipe so the DCE/RPC binding survives across BIND + REQUEST.
@@ -2886,14 +3085,18 @@ impl SmbSession {
         let resp = self.ioctl_pipe_persistent(&fid, &req).await?;
         let _ = self.close_pipe_persistent(&fid).await;
 
-        let names = parse_srvsvc_share_names(&resp);
+        let shares = parse_srvsvc_shares(&resp);
         info!(
             "SMB: Found {} share(s) on {}: [{}]",
-            names.len(),
+            shares.len(),
             self.target,
-            names.join(", ")
+            shares
+                .iter()
+                .map(|info| info.name.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
-        Ok(names)
+        Ok(shares)
     }
 
     /// Query the remote OS release via SRVSVC `NetrServerGetInfo` (opnum 21).
@@ -2920,18 +3123,50 @@ impl SmbSession {
 
     /// List all shares and return access results for each one.
     pub async fn enumerate_accessible_shares(&self) -> Vec<ShareAccessResult> {
-        let all_shares = match self.list_shares().await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(
-                    "SMB: list_shares on {} failed: {e} -- falling back to known shares",
+        let shares = match self.list_shares_typed().await {
+            Ok(s) if !s.is_empty() => s,
+            Ok(_) => {
+                debug!(
+                    "SMB: SRVSVC on {} advertised no shares -- probing the well-known \
+                     administrative shares instead",
                     self.target
                 );
-                ADMIN_SHARES.iter().map(|s| s.to_string()).collect()
+                known_shares_info()
+            }
+            Err(e) => {
+                warn!(
+                    "SMB: SRVSVC enumeration on {} failed: {e} -- probing the well-known \
+                     administrative shares instead",
+                    self.target
+                );
+                known_shares_info()
             }
         };
-        let share_refs: Vec<&str> = all_shares.iter().map(String::as_str).collect();
-        self.check_share_access(&share_refs).await
+        self.check_share_access_typed(&shares).await
+    }
+
+    /// Like [`Self::check_share_access`] but keeps the `SHARE_INFO_1` type and
+    /// remark that came back from SRVSVC.
+    async fn check_share_access_typed(&self, shares: &[ShareInfo]) -> Vec<ShareAccessResult> {
+        let mut results = Vec::with_capacity(shares.len());
+        for info in shares {
+            let readable = self.check_share_read(&info.name).await;
+            let writable = if readable && !info.is_ipc() {
+                self.check_share_write(&info.name).await
+            } else {
+                false
+            };
+            results.push(ShareAccessResult {
+                share_name: info.name.clone(),
+                readable,
+                writable,
+                is_admin_share: ADMIN_SHARES.contains(&info.name.as_str()),
+                share_type: info.type_label().to_string(),
+                remark: info.remark.clone(),
+                enumerated: true,
+            });
+        }
+        results
     }
 }
 
@@ -3069,13 +3304,22 @@ fn build_srvsvc_net_share_enum_req(server: &str) -> Vec<u8> {
     build_rpc_request(15, &stub)
 }
 
-/// Parse share names from a SRVSVC NetShareEnumAll response.
+/// Parse shares from a SRVSVC NetShareEnumAll response.
 /// Layout (stub after 20-byte DCE/RPC response header):
 /// `return_code(4) + InfoStruct.referent(4) + level(4) + Info1.referent(4)
 /// + entries_read(4) + Buffer.referent(4) + max_count(4)
 /// + N * SHARE_INFO_1{ name_ref(4)+type(4)+remark_ref(4) }
 /// + [deferred strings: (name_str, remark_str) per entry]`
-fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
+///
+/// Every field comes out of the server's own response: the name, the `shi1_type`
+/// bits (which give the `Disk`/`IPC`/`Print`/`Device` label) and the
+/// `shi1_remark` (the comment `smbclient -L` prints).
+fn parse_srvsvc_shares(resp: &[u8]) -> Vec<ShareInfo> {
+    trace!(
+        "SRVSVC NetShareEnumAll raw response ({} bytes): {:02x?}",
+        resp.len(),
+        resp
+    );
     const HDR: usize = 20;
     if resp.len() < HDR + 28 {
         debug!("SRVSVC: response too short: {} bytes", resp.len());
@@ -3139,31 +3383,62 @@ fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
     }
 
     // Each SHARE_INFO_1: name_ref(4) + type(4) + remark_ref(4) = 12 bytes
-    let mut ptrs: Vec<(u32, u32)> = Vec::with_capacity(actual);
+    let mut entries: Vec<(u32, u32, u32)> = Vec::with_capacity(actual);
     for i in 0..actual {
         let off = ARR_OFF + i * 12;
         let name_ref = u32::from_le_bytes([s[off], s[off + 1], s[off + 2], s[off + 3]]);
+        let share_type = u32::from_le_bytes([s[off + 4], s[off + 5], s[off + 6], s[off + 7]]);
         let remark_ref = u32::from_le_bytes([s[off + 8], s[off + 9], s[off + 10], s[off + 11]]);
-        ptrs.push((name_ref, remark_ref));
+        entries.push((name_ref, share_type, remark_ref));
     }
 
-    // Walk deferred strings: name then remark for each entry
+    // Walk the deferred strings: name, then remark, per entry, in entry order.
     let mut pos = ARR_OFF + actual * 12;
-    let mut names = Vec::new();
-    for (name_ref, remark_ref) in &ptrs {
-        if *name_ref != 0
-            && let Some((name, new_pos)) = read_ndr_wide_string(s, pos)
-        {
-            pos = new_pos;
-            names.push(name);
+    let mut shares = Vec::with_capacity(entries.len());
+    for (name_ref, share_type, remark_ref) in &entries {
+        if *name_ref == 0 {
+            continue;
         }
+        let Some((name, next)) = read_ndr_wide_string(s, pos) else {
+            // An unreadable name means the string pool is malformed; stop here
+            // rather than mis-align every remaining entry.
+            debug!("SRVSVC: could not read a share name at offset {pos}");
+            break;
+        };
+        pos = next;
+        let mut remark = String::new();
         if *remark_ref != 0
-            && let Some((_, new_pos)) = read_ndr_wide_string(s, pos)
+            && let Some((parsed, next)) = read_ndr_wide_string(s, pos)
         {
-            pos = new_pos;
+            pos = next;
+            remark = parsed.trim().to_string();
         }
+        trace!(
+            "SRVSVC: share {:?} type=0x{share_type:08X} remark={remark:?}",
+            name.trim()
+        );
+        shares.push(ShareInfo {
+            name: name.trim().to_string(),
+            share_type: *share_type,
+            remark,
+        });
     }
-    names
+    trace!(
+        "SRVSVC: parsed {} of {} advertised share entries (max_count={})",
+        shares.len(),
+        entry_count,
+        actual
+    );
+    shares
+}
+
+/// [`parse_srvsvc_shares`] without the metadata, for callers that only want names.
+#[cfg(test)]
+fn parse_srvsvc_share_names(resp: &[u8]) -> Vec<String> {
+    parse_srvsvc_shares(resp)
+        .into_iter()
+        .map(|info| info.name)
+        .collect()
 }
 
 /// Read an NDR conformant-varying wide string at `offset` within `data`.
@@ -3659,5 +3934,99 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert_eq!(names[0], "ADMIN$");
         assert_eq!(names[1], "C$");
+    }
+
+    #[test]
+    fn test_share_type_label_matches_netexec() {
+        assert_eq!(share_type_label(0), "Disk");
+        assert_eq!(share_type_label(STYPE_PRINTQ), "Print");
+        assert_eq!(share_type_label(STYPE_DEVICE), "Device");
+        assert_eq!(share_type_label(STYPE_IPC), "IPC");
+        // STYPE_SPECIAL (administrative shares) only decorates the type.
+        assert_eq!(share_type_label(STYPE_DISKTREE | STYPE_SPECIAL), "Disk");
+        assert_eq!(share_type_label(STYPE_IPC | STYPE_SPECIAL), "IPC");
+    }
+
+    #[test]
+    fn test_known_shares_fallback_covers_dc_shares() {
+        let names: Vec<&str> = KNOWN_SHARES.iter().map(|(n, _)| *n).collect();
+        for expected in ["C$", "ADMIN$", "IPC$", "SYSVOL", "NETLOGON"] {
+            assert!(names.contains(&expected), "missing {expected}");
+        }
+        // IPC$ must be typed IPC, not Disk, so the table matches nxc.
+        let ipc = KNOWN_SHARES
+            .iter()
+            .find(|(n, _)| *n == "IPC$")
+            .map(|(_, t)| *t)
+            .unwrap();
+        assert_eq!(share_type_label(ipc), "IPC");
+    }
+
+    #[test]
+    fn test_known_shares_info_is_owned_and_has_no_remark() {
+        let probed = known_shares_info();
+        assert_eq!(probed.len(), KNOWN_SHARES.len());
+        assert!(
+            probed
+                .iter()
+                .any(|s| s.name == "IPC$" && s.type_label() == "IPC")
+        );
+        // A probed share was never described by a server, so it has no remark
+        // and the caller knows it did not come from an enumeration.
+        assert!(probed.iter().all(|s| s.remark.is_empty()));
+    }
+
+    #[test]
+    fn test_parse_srvsvc_shares_keeps_type_and_remark() {
+        // One IPC$ entry with shi1_type = STYPE_IPC | STYPE_SPECIAL and a real
+        // shi1_remark. Both used to be dropped, so every share was rendered as
+        // "Disk"/"Admin" and no comment was ever shown.
+        let hdr = 20usize;
+        let name_raw = ndr_conformant_string("IPC$");
+        let remark_raw = ndr_conformant_string("Remote IPC ");
+        let name_ndr = &name_raw[4..]; // skip referent_id
+        let remark_ndr = &remark_raw[4..];
+
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&0u32.to_le_bytes()); // return_code
+        buf.extend_from_slice(&1u32.to_le_bytes()); // InfoStruct referent
+        buf.extend_from_slice(&1u32.to_le_bytes()); // level
+        buf.extend_from_slice(&0x00020000u32.to_le_bytes()); // Info1 referent
+        buf.extend_from_slice(&1u32.to_le_bytes()); // entries_read
+        buf.extend_from_slice(&0x00020004u32.to_le_bytes()); // Buffer referent
+        buf.extend_from_slice(&1u32.to_le_bytes()); // max_count
+        buf.extend_from_slice(&0x00020008u32.to_le_bytes()); // name_ref
+        buf.extend_from_slice(&(STYPE_IPC | STYPE_SPECIAL).to_le_bytes()); // type
+        buf.extend_from_slice(&0x0002000cu32.to_le_bytes()); // remark_ref
+        buf.extend_from_slice(name_ndr);
+        buf.extend_from_slice(remark_ndr);
+
+        let mut full = vec![0u8; hdr];
+        full.extend_from_slice(&buf);
+
+        let shares = parse_srvsvc_shares(&full);
+        assert_eq!(
+            shares,
+            vec![ShareInfo {
+                name: "IPC$".to_string(),
+                share_type: STYPE_IPC | STYPE_SPECIAL,
+                remark: "Remote IPC".to_string(),
+            }]
+        );
+        assert_eq!(shares[0].type_label(), "IPC");
+        assert!(shares[0].is_special());
+        assert!(shares[0].is_ipc());
+    }
+
+    #[test]
+    fn test_probed_share_result_is_not_enumerated() {
+        let result = probed_share_result("C$", true, false);
+        assert!(result.readable);
+        assert!(
+            !result.enumerated,
+            "an explicit name is a probe, not a list"
+        );
+        assert!(result.remark.is_empty());
+        assert!(result.is_admin_share);
     }
 }
