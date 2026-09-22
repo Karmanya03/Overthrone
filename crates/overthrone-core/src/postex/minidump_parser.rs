@@ -48,9 +48,9 @@ const MDMP_SIGNATURE: u32 = 0x5044_4d4d; // "MDMP"
 const MDMP_VERSION: u32 = 0x0000_A793;
 
 // Stream types (subset relevant to credential extraction)
-#[expect(dead_code)]
+#[allow(dead_code)]
 const STREAM_RESERVED: u32 = 0x0000_0000;
-#[expect(dead_code)]
+#[allow(dead_code)]
 const STREAM_THREAD_LIST: u32 = 0x0000_0003;
 const STREAM_MODULE_LIST: u32 = 0x0000_0004;
 const STREAM_MEMORY_LIST: u32 = 0x0000_0005;
@@ -60,7 +60,7 @@ const STREAM_MEMORY_INFO_LIST: u32 = 0x0000_1016;
 #[derive(Debug, Clone, Copy)]
 struct StreamEntry {
     stream_type: u32,
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     data_size: u32,
     rva: u32,
 }
@@ -68,7 +68,7 @@ struct StreamEntry {
 // Memory range descriptor
 #[derive(Debug, Clone, Copy)]
 struct MemoryRange {
-    #[expect(dead_code)]
+    #[allow(dead_code)]
     start: u64,
     size: u32,
     data_rva: u32,
@@ -131,10 +131,9 @@ pub fn parse_minidump(dump: &[u8]) -> Result<MinidumpParseResult, String> {
 // ── Header parsing ───────────────────────────────────────────────
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct MinidumpHeader {
-    #[expect(dead_code)]
     signature: u32,
-    #[expect(dead_code)]
     version: u32,
     number_of_streams: u32,
     stream_directory_rva: u32,
@@ -585,7 +584,7 @@ fn is_hex_string(bytes: &[u8]) -> bool {
     bytes.iter().all(|b| b.is_ascii_hexdigit())
 }
 
-#[expect(dead_code)]
+#[allow(dead_code)]
 fn bytes_to_hex(bytes: &[u8]) -> String {
     bytes
         .iter()
