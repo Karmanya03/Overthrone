@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://github.com/Karmanya03/Overthrone/releases"><img src="https://img.shields.io/github/v/release/Karmanya03/Overthrone?style=flat-square&color=cc0000" alt="release" /></a>
   <a href="https://github.com/Karmanya03/Overthrone/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-cc0000?style=flat-square" alt="license" /></a>
-  <img src="https://img.shields.io/badge/version-0.4.9-cc0000?style=flat-square" alt="version" />
+  <img src="https://img.shields.io/badge/version-0.5.0-cc0000?style=flat-square" alt="version" />
   <img src="https://img.shields.io/badge/written_in-Rust-cc0000?style=flat-square" alt="rust" />
   <img src="https://img.shields.io/badge/target-Active_Directory-cc0000?style=flat-square" alt="AD" />
 </p>
@@ -410,6 +410,21 @@ The items below used to be `todo!()`. They are now real code. Some of them took 
 | **SecretsDump boot key ControlSet fallback** | `core/src/proto/secretsdump.rs` | Boot key extraction tries all ControlSetNNN (001-016) if the active one fails. Handles corrupted/restored registry hives. |
 | **SMB negotiate order optimization** | `core/src/proto/smb2.rs` | Now tries 3.0.2 first (works on 95% of envs), falls back to 3.1.1. Eliminates double TCP connect overhead for pre-3.1.1 environments. |
 | **SMB connect timeout for WAN** | `core/src/proto/smb2.rs` | New `connect_with_timeout(target, port, timeout_secs)` method. Default increased from 10s to 15s. Supports high-latency WAN/VPN links. |
+| **SMB2 signing auto-detection** | `core/src/proto/smb2.rs` | `SigningVariant` models AES-CMAC/GCM x v1/v1-preauth combos; `recv_verified()` probes all candidates and pins the winner per session. WS2022/WS2025 GCM-announced-but-CMAC-signed quirk handled automatically. `ovt smb sign-diag` dumps per-candidate signing keys. |
+| **ZeroLogon (CVE-2020-1472)** | `core/src/proto/netlogon.rs` | dirkjanm-exact wire format: `DC$` account, SecureChannelType 6, flags `0x212fffff`, NetrServerPasswordSet2 opnum 30. `check` / 1/256 `probe` / destructive `exploit` with `--force` gate + restore guidance. `ovt zerologon`. |
+| **PrintNightmare (CVE-2021-1675/34527)** | `core/src/proto/printnightmare.rs` | ly4k-exact wire format: RpcAddPrinterDriverEx opnum 89, EnumPrinterDrivers opnum 10 two-round probing, DeleteDriverEx opnum 84. Check-mode verdict classification (0x57 vulnerable vs 0x8001011B patched). `ovt printnightmare check/exploit/list/delete`. |
+| **NTLM leak artifacts (CVE-2025-24054)** | `core/src/proto/ntlm_leak.rs` | `.library-ms` / `.searchConnector-ms` / `.url` / `.website` / `.scf` / `.lnk` generators pointing at an attacker share. `ovt ntlm leak --unc \\ip\share`. 21 tests. |
+| **Sherlock 2026 KEV update** | `core/src/postex/sherlock.rs` | 6 new 2026 CVEs incl. CVE-2026-96951, CVE-2026-56155 (all CISA KEV). `actively_exploited` flag marks live threats regardless of KB state. 30-entry database, 24 tests. |
+| **smbserver.py parity** | `relay/src/smb_daemon.rs` | `SmbDaemonMode::FileShare` serves a local directory over SMB2 (`ovt ntlm smb-daemon --share-root ./payloads --share-name payloads`) while still capturing credentials on every session setup. Directory creation (`FILE_OPEN_IF`) + file read/write. Raw TCP integration test drives a real SMB2 client end-to-end. |
+| **Kerberos capture (krbrelayx parity)** | `relay/src/krb_capture.rs` | SPNEGO/Kerberos TLV parsing inside SMB session-setup blobs: KRB5 mech detection, AP-REQ extraction, real realm/sname/etype/kvno/cipher parsing, `build_kirbi()` writing loadable `.kirbi` KRB-CRED files, `decrypt_ticket()` with a known long-term key. `ovt ntlm smb-daemon --krb5-capture --ticket-dir ./tickets [--krb-key <hex>]`. |
+| **SMTP + IMAP relay targets (ntlmrelayx parity)** | `relay/src/relay.rs` | `Protocol::Smtp` (EHLO -> AUTH NTLM -> 334/235 + mail-send over the relayed session with dot-stuffing) and `Protocol::Imap` (CAPABILITY -> AUTHENTICATE NTLM, empty + inline continuation styles, tagged OK/NO verdicts). `smtp://` and `imap://` target prefixes with 25/587 and 143 defaults. 9 mock-server tests total. |
+| **Standalone ticket description** | `crates/overthrone-cli` | `ovt ticket --ticket <kirbi|ccache|raw> --format json|human` parses tickets offline (realm, sname, etypes, kvno, times, expiry status, TGT detection); `ovt kerberos describe` unchanged. |
+| **Event log operations** | `core/src/proto/even.rs` | `ovt events clear` / `ovt events backup` via `ElfrClearLogFileW` (opnum 7) and `ElfrBackupEventLogW` (opnum 9) on `\pipe\eventlog` -- log truncate/backup as SYSTEM. |
+| **Kerberos relay (krbrelayx `--relay` parity)** | `relay/src/krb_relay.rs` | Captured SMB AP-REQ tickets are SPNEGO-unwrapped and re-wrapped onto an LDAP or HTTP target (`relay_kerberos_to_ldap()` / `relay_kerberos_to_http()`), turning stolen machine TGTs into working sessions. `ovt ntlm smb-daemon --krb-relay ldap://DC:389` (implies `--krb5-capture`). |
+| **ADWS / WS-Trust enumeration (soaphound parity)** | `core/src/proto/adws.rs`, `cli/src/commands/adws.rs` | AD enumeration over TCP 9389 with NTLM BinaryExchange -- works where LDAP is hardened (signed-bind enforcement, LDAPS-only policies, firewall drops 389/636 but leaves 9389 open). `ovt adws enum` / `ovt adws search` with arbitrary LDAP filters, pull paging, JSON output. |
+| **Scenario playbook (`ovt playbook`)** | `cli/src/commands/playbook.rs` | 26 built-in recipes (recon, kerberoast, dcsync, golden, rbcd, samname, zerologon, printnightmare, certifried, adcs, relay, unconstrained, offline-dump, relay-to-da...) with per-step verified commands + OPSEC notes. Aliased `ovt cheatsheet`; case-insensitive name matching. |
+| **LSA DPAPI key decode** | `core/src/proto/secretsdump.rs`, `core/src/crypto/dpapi.rs` | SECURITY hive LSA secret parsing decodes `G$DPAPI_MACHINE_KEY` / `G$DPAPI_USER_KEY` / `G$BCKKEYLINK` into `DpapiKeyRecord`s -- the DPAPI domain backup key chain for offline masterkey decryption (paired with `parse_masterkey_file_bytes()`). |
+| **HTML report export** | `reaper/src/export.rs` | `ExportFormat::Html` writes a standalone offline findings report (users / groups / computers / trusts) alongside the JSON/CSV/markdown/sarif exporters. |
 
 ### ⚠️ Still Pending
 
@@ -423,11 +438,9 @@ No sugarcoating. These are genuinely not done.
 | **CG check CLI integration** | Multi-signal CG detection (`ovt cg <target>`) already wired via `CgAction`. | ✅ Wired | Fully integrated CLI. Credential Guard detection with multiple signal sources. |
 | **4 Azure AD ops CLI** | All 8 Azure AD operations have CLI subcommands (Enum, SeamlessSso, GoldenSaml, PrtTheft, ManagedIdentityToken, EntraConnectExtract, AppRegistrationAbuse, DeviceCodePhish). | ✅ Wired | Library code exists for all 8, CLI wired for all 8. SeamlessSSO/GoldenSAML need end-to-end flow testing. |
 | **Exchange relay CLI** | Exchange relay (`ovt ntlm exchange`) already wired in CLI relay subsystem. | ✅ Wired | Fully integrated with `--tls-verify` and `--tls-cert`/`--tls-key` flags. |
-| **SMBDaemon** | A dedicated SMB server for capturing credentials outside of responder. | ❌ Not yet | Does not exist anywhere in the codebase. |
+| **SMBDaemon** | Dedicated SMB server with credential capture (Responder alternative), plus smbserver.py file-share mode and krbrelayx-style Kerberos capture. | ✅ Wired | `ovt ntlm smb-daemon`: `--share-root`/`--share-name` hosts a real share; `--krb5-capture --ticket-dir` writes `.kirbi` files (`--krb-key` decrypts inline). |
 | **WmiExec on Linux/macOS** | WMI requires DCOM which requires Windows COM infrastructure. | ❌ Windows only | Use `--method psexec` or `--method smbexec` on Linux. |
 | **Azure AD Seamless SSO + Golden SAML** | Full Azure AD Kerberos/SAML integration - the big cloud-AD gap. | ❌ Not yet | Azure AD ops exist but no full Seamless SSO or Golden SAML end-to-end flows. |
-| **Ticket encryption rotation** | Re-encrypt a forged ticket under a different krbtgt key without forging again. | ❌ Not yet | Feature request, not a blocker. |
-| **Viewer WebSocket** | Live graph updates without page reload. | ❌ Not yet | Largest UX improvement per effort. |
 
 ## Does It Actually Work?
 
@@ -641,6 +654,9 @@ Born complete. Stayed complete. Added more features just to flex. Still zero stu
 | **NTLM Relay Engine** | Full relay - capture NTLM auth from one protocol, replay to another. SMB→LDAP, HTTP→SMB, mix and match like a deadly cocktail. | ✅ Full |
 | **HTTP→SMB Asymmetric Relay** | `http_asymmetric.rs` - full HTTP request capture and replay. Captures method/URI/headers/body, extracts NTLM token, replays authenticated request to target. Connection-based state tracking (NAT-safe). Post-auth modes for HTTP/HTTPS/WebDAV/Exchange vs SMB/LDAP/MSSQL. CLI: `ovt ntlm http-asymmetric`. | ✅ Full |
 | **Exchange Relay** | CVE-2024-21410 - NTLM relay to Exchange MAPI-over-HTTP and EWS endpoints. TLS support, self-signed cert acceptance, EPA/channel binding bypass. Pre-CU14 Exchange servers accept relayed NTLM auth without Extended Protection. | ✅ Full |
+| **SMTP / IMAP Relay Targets** | `Protocol::Smtp` (EHLO -> AUTH NTLM -> 334/235, plus mail-send over the relayed session with dot-stuffing) and `Protocol::Imap` (CAPABILITY -> AUTHENTICATE NTLM; both empty-continuation and inline-challenge flows; tagged OK/NO verdicts). `smtp://` and `imap://` schemes. ntlmrelayx parity. | ✅ Full |
+| **Kerberos Capture (krbrelayx parity)** | SMB session-setup SPNEGO parsing: KRB5 mech OID discovery, AP-REQ extraction with authenticator/ticket field parsing, KRB-CRED `.kirbi` builder, optional krbtgt-key inline decryption. Full integration test over a live TCP daemon (`ovt ntlm smb-daemon --krb5-capture --ticket-dir <dir>`). | ✅ Full |
+| **SMB File-Share Daemon (smbserver.py parity)** | `ovt ntlm smb-daemon --share-root <dir> --share-name <name>` serves a local directory over SMB2 while still capturing credentials. Directory creation + file read/write against the attack box. | ✅ Full |
 | **SMB Signing Pre-Flight** | Inline SMB2 negotiate probe checks `SecurityMode` before relaying. If the target requires packet signing, relay refuses with a clear error. | ✅ Full |
 | **LDAP Signing Bypass** | CVE-2019-1040 "Drop the MIC" - strips SIGN/SEAL flags from the target's CHALLENGE before the victim sees it, zeroes MIC in AUTHENTICATE. Relayed sessions can perform LDAP operations (add-to-group, search, modify-replace). | ✅ Full |
 | **DCE/RPC Signature Stripping** | `strip_dce_rpc_signature` in core - strips NTLM auth verifier from DCE/RPC request PDUs. Wired in `smb_daemon.rs::relay_ioctl()`. Enables relay against MS-RPRN and MS-EFSR. | ✅ Full |

@@ -8,6 +8,8 @@ pub mod captive_portal;
 pub mod exchange;
 pub mod http_asymmetric;
 pub mod http_relay;
+pub mod krb_capture;
+pub mod krb_relay;
 pub mod mitm6;
 pub mod poisoner;
 pub mod relay;
@@ -25,7 +27,11 @@ pub use captive_portal::{
 };
 pub use http_asymmetric::{HttpAsymmetricConfig, HttpAsymmetricRelay};
 pub use http_relay::{HttpRelay, HttpRelayConfig};
-pub use relay::RelayStats;
+pub use krb_capture::{
+    ApReq, CapturedKerberosTicket, CompleteKirbi, DecryptedTicket, TicketInfo, build_kirbi,
+    build_krb5_spnego_challenge, decrypt_ticket, is_kerberos_offering, parse_ap_req,
+};
+pub use relay::{RelayStats, smtp_send_mail_on_session};
 pub use responder::CapturedCredential;
 pub use smb_daemon::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 pub use tls_relay::{CbtMode, TlsRelay, TlsRelayConfig};
@@ -65,6 +71,10 @@ pub enum Protocol {
     Webdav,
     /// `Msmq` variant (Microsoft Message Queuing, port 1801)
     Msmq,
+    /// `Smtp` variant (SMTP with SASL AUTH NTLM, ports 25/587)
+    Smtp,
+    /// `Imap` variant (IMAP4rev1 with SASL AUTHENTICATE NTLM, port 143)
+    Imap,
     /// `Exchange` variant (MAPI-over-HTTP / EWS, CVE-2024-21410)
     Exchange,
 }
@@ -80,6 +90,8 @@ impl std::fmt::Display for Protocol {
             Self::Mssql => write!(f, "MSSQL"),
             Self::Webdav => write!(f, "WebDAV"),
             Self::Msmq => write!(f, "MSMQ"),
+            Self::Smtp => write!(f, "SMTP"),
+            Self::Imap => write!(f, "IMAP"),
             Self::Exchange => write!(f, "Exchange"),
         }
     }
@@ -237,6 +249,10 @@ pub struct RelayControllerConfig {
     pub poison_ip: Option<String>,
     /// Configuration for standalone WPAD proxy server (None = disabled)
     pub wpad_config: Option<WpadConfig>,
+    /// Command executed on successfully relayed sessions (see
+    /// `relay::RelayConfig::post_auth_command`). MSSQL targets run it as an
+    /// SQL batch; LDAP targets accept `add-to-group`/`modify`/`search` verbs.
+    pub post_auth_command: Option<String>,
 }
 
 impl Default for RelayControllerConfig {
@@ -267,6 +283,7 @@ impl Default for RelayControllerConfig {
             analyze_only: false,
             poison_ip: None,
             wpad_config: None,
+            post_auth_command: None,
         }
     }
 }
@@ -362,6 +379,7 @@ impl RelayController {
                 max_connections: 64,
                 tls_config: self.config.tls_config.clone(),
                 socks5_proxy: self.config.socks5_proxy.clone(),
+                post_auth_command: self.config.post_auth_command.clone(),
             };
             let ntlm_relay = relay::NtlmRelay::new(relay_config);
             let relay_arc = Arc::new(TokioMutex::new(ntlm_relay));
@@ -762,6 +780,7 @@ pub async fn run_responder(interface: &str, challenge: Option<&str>) -> Result<R
         analyze_only: false,
         poison_ip: None,
         wpad_config: None,
+        post_auth_command: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -803,6 +822,7 @@ pub async fn run_relay_attack(
         analyze_only: false,
         poison_ip: None,
         wpad_config: None,
+        post_auth_command: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -843,6 +863,7 @@ pub async fn run_http_asymmetric_relay(
             ldap_signing_bypass: true,
             max_retries: 3,
             timeout_secs: 30,
+            post_auth_command: None,
         }),
         auto_coerce_parallel: false,
         auto_coerce_mode: "all".to_string(),
@@ -852,6 +873,7 @@ pub async fn run_http_asymmetric_relay(
         analyze_only: false,
         poison_ip: None,
         wpad_config: None,
+        post_auth_command: None,
     };
 
     let mut controller = RelayController::new(config);
@@ -951,6 +973,7 @@ mod tests {
                 max_retries: 3,
                 timeout_secs: 30,
                 cbt_mode: tls_relay::CbtMode::Strip,
+                post_auth_command: None,
             }),
             ..RelayControllerConfig::default()
         };
@@ -1027,6 +1050,7 @@ mod tests {
             analyze_only: false,
             poison_ip: None,
             wpad_config: None,
+            post_auth_command: None,
         };
         assert_eq!(config.auto_coerce_mode, "all");
         assert!(!config.auto_coerce_parallel);

@@ -11,6 +11,8 @@ description = "Core library: protocols, crypto, types, graph engine"
 # Async & Core
 tokio.workspace = true
 serde.workspace = true
+# quick-xml: WS-Man SOAP XML parsing (ADWS collector)
+quick-xml = { version = "0.39", features = ["serialize"] }
 serde_json.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
@@ -119,7 +121,6 @@ wmi = "0.13"
 # reqwest: HTTP client for WinRM WS-Man
 [target.'cfg(not(windows))'.dependencies]
 ntlmclient = "0.2"
-quick-xml = { version = "0.39", features = ["serialize"] }
 reqwest = { workspace = true }
 uuid = { workspace = true }
 

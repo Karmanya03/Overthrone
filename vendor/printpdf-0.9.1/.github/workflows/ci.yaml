@@ -1,0 +1,140 @@
+name: Build and test
+on: [push, pull_request]
+
+jobs:
+
+  check-no-default-features:
+    name: Check and test (no default features)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --no-default-features --verbose
+      - run: cargo test --no-default-features --lib --verbose
+
+  check-feature-combinations:
+    name: Check feature combinations
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features:
+          - "images"
+          - "images,png"
+          - "images,jpeg"
+          - "images,gif"
+          - "images,tiff"
+          - "images,bmp"
+          - "images,webp"
+          - "images,png,jpeg,gif,tiff,bmp,webp"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --no-default-features --features "${{ matrix.features }}" --verbose
+
+  check-and-test-unix:
+    name: Cargo check and test on Unix systems
+    strategy:
+      matrix:
+        channel: [stable]
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install ${{ matrix.channel }} toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.channel }}
+      - run: cargo check --verbose --examples
+      - run: cargo check --verbose
+      # - run: cargo test --verbose # fails because of SIMD issues, test on Windows only
+
+
+  check-and-test-windows:
+    name: Cargo check and test on Windows
+    strategy:
+      matrix:
+        target-sys: ["i686-pc-windows", "x86_64-pc-windows"]
+        target-abi: ["msvc"]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain for ${{ matrix.target-sys }}-${{ matrix.target-abi }}
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target-sys }}-${{ matrix.target-abi }}
+      - run: cargo check --verbose --target ${{ matrix.target-sys }}-${{ matrix.target-abi }} --examples
+      - run: cargo check --verbose --target ${{ matrix.target-sys }}-${{ matrix.target-abi }}
+      - run: cargo test --verbose --target ${{ matrix.target-sys }}-${{ matrix.target-abi }}
+
+  check-wasm32:
+    name: Cargo check on wasm32
+    strategy:
+      matrix:
+        channel: [stable]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain using wasm32-unknown-unknown target
+        uses: dtolnay/rust-toolchain@master
+        with:
+          target: wasm32-unknown-unknown
+          toolchain: ${{ matrix.channel }}
+      - run: rustup target add wasm32-wasip1
+      - run: rustup target add wasm32-wasip2
+      - run: rustup target add wasm32-unknown-unknown
+      - run: cargo check --verbose --target wasm32-unknown-unknown --examples
+      - run: cargo check --verbose --target wasm32-unknown-unknown
+      - run: cargo check --verbose --target wasm32-wasip1 --examples
+      - run: cargo check --verbose --target wasm32-wasip1
+      - run: cargo check --verbose --target wasm32-wasip2 --examples
+      - run: cargo check --verbose --target wasm32-wasip2
+      - run: cargo check --verbose --target wasm32-wasip2 --no-default-features
+      - run: cargo check --verbose --target wasm32-wasip2 --all-features
+
+  generate-pdf-artifacts:
+    name: Generate PDF artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      # No-feature examples
+      - name: Run no-feature examples
+        run: |
+          for ex in advanced bookmarks customfont graphics layers multipage text otf-font; do
+            echo "=== Running $ex ==="
+            cargo run --example "$ex" || true
+          done
+
+      # Image example
+      - name: Run image example
+        run: cargo run --example image --features "images,png" || true
+
+      # SVG example
+      - name: Run svg example
+        run: cargo run --example svg --features svg || true
+
+      # HTML-feature examples
+      - name: Run HTML examples
+        run: |
+          for ex in html css_shapes html_full html_full_debug shape pagination_test \
+                    baseline_alignment table_debug debug_pagination debug_displaylist \
+                    pagination_boundary_test margin_collapse margin_collapse_inline \
+                    margin_collapse_border_test margin_collapse_comprehensive; do
+            echo "=== Running $ex ==="
+            cargo run --example "$ex" || true
+          done
+
+      # Collect and upload PDFs
+      - name: Collect PDFs
+        run: |
+          mkdir -p pdf-artifacts
+          find . -maxdepth 1 -name '*.pdf' -exec cp {} pdf-artifacts/ \;
+          ls -la pdf-artifacts/
+      - name: Upload PDF artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-output-${{ github.sha }}
+          path: pdf-artifacts/
+          retention-days: 30
+

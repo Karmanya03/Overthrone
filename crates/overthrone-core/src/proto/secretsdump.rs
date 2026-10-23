@@ -11,6 +11,11 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use crate::crypto::dpapi::{
+    DpapiBackupKey, DpapiMasterkeyFile, format_dpapi_guid, parse_guid_text,
+    parse_masterkey_file_bytes,
+};
+
 // ===========================================================
 //  Hex encoding helper (no external crate needed)
 // ===========================================================
@@ -168,6 +173,13 @@ pub fn dump_lsa(security_data: &[u8], system_data: &[u8]) -> Result<Vec<LsaCrede
         } else if name.starts_with("DefaultPassword") {
             let plain = decode_utf16le(&decrypted);
             (None, Some(plain))
+        } else if let Some(surface) = parse_dpapi_key_secret(name, &decrypted) {
+            // DPAPI key forms (G$DPAPI_*_KEY / G$BCKKEYLINK): raw hex as the
+            // key material, decoded summary as the friendly surface
+            (
+                Some(hex_encode(&decrypted)),
+                Some(surface.record().summary.clone()),
+            )
         } else if name.starts_with("DPAPI") || name.starts_with("NL$KM") {
             // Key material -- store raw hex as the "hash"
             (Some(hex_encode(&decrypted)), None)
@@ -572,7 +584,8 @@ fn enumerate_subkeys(data: &[u8], nk_offset: usize) -> Result<Vec<(usize, String
 /// HKLM\SYSTEM\CurrentControlSet\Control\Lsa: JD, Skew1, GBG, Data.
 /// Tries the active ControlSet first, then falls back to all ControlSetNNN
 /// subkeys if the default fails (e.g., corrupted Select key or restored hive).
-fn extract_boot_key(system_data: &[u8]) -> Result<[u8; 16]> {
+/// Also consumed by the offline NTDS.dit parser (`postex::ntds_dit`).
+pub fn extract_boot_key(system_data: &[u8]) -> Result<[u8; 16]> {
     // First, find CurrentControlSet (usually ControlSet001)
     // The "Select" key's "Current" value tells us which ControlSet is active.
     let current_cs = navigate_path(system_data, &["Select"])
@@ -1263,6 +1276,12 @@ pub fn classify_lsa_secret(name: &str) -> &'static str {
         "Service Account Password"
     } else if name.starts_with("NL$KM") {
         "NL$KM -- Cached Credentials Encryption Key"
+    } else if name.eq_ignore_ascii_case("G$DPAPI_MACHINE_KEY") {
+        "DPAPI Masterkey File (machine)"
+    } else if name.eq_ignore_ascii_case("G$DPAPI_USER_KEY") {
+        "DPAPI Masterkey File (user)"
+    } else if name.starts_with("G$BCKKEYLINK\\") {
+        "DPAPI Backup Key Link"
     } else if name.starts_with("DPAPI") {
         "DPAPI Master Key Backup"
     } else if name.starts_with("$MACHINE.ACC") {
@@ -1274,6 +1293,134 @@ pub fn classify_lsa_secret(name: &str) -> &'static str {
     } else {
         "Unknown LSA Secret"
     }
+}
+
+// ===========================================================
+//  DPAPI key-form secrets (G$DPAPI_MACHINE_KEY / G$DPAPI_USER_KEY /
+//  G$BCKKEYLINK) -- mimikatz `lsadump::secrets` parity
+// ===========================================================
+
+/// A recognized DPAPI key-form secret decoded out of an LSA secret.
+///
+/// - `G$DPAPI_MACHINE_KEY` / `G$DPAPI_USER_KEY` carry a [masterkey-file]
+///   structure (version / GUID / SID / encrypted payload).
+/// - `G$BCKKEYLINK\{GUID}` carries the backup key material that decrypts
+///   masterkey files (pairs with `DpapiDecryptor`).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DpapiKeyRecord {
+    /// Secret name in the registry.
+    pub name: String,
+    /// `machine-masterkey-file`, `user-masterkey-file`, or `backup-key-link`.
+    pub kind: String,
+    /// GUID, formatted `{...}` (from on-disk bytes or the secret name).
+    pub guid: String,
+    /// User SID carried in the masterkey file (machine keys: as stored).
+    pub user_sid: Option<String>,
+    /// Masterkey file version (2, 3, or 4).
+    pub version: Option<u32>,
+    /// Encrypted payload length (masterkey files).
+    pub encrypted_data_len: usize,
+    /// Backup key material length (BCKKEYLINK).
+    pub key_material_len: usize,
+    /// mimikatz-style summary line for display.
+    pub summary: String,
+}
+
+/// The pair returned by [`parse_dpapi_key_secret`]: the decoded record plus
+/// the crypto surface (`DpapiMasterkeyFile` or `DpapiBackupKey`).
+#[derive(Debug, Clone)]
+pub enum DpapiKeySurface {
+    /// G$DPAPI_MACHINE_KEY / G$DPAPI_USER_KEY value decoded as a masterkey file.
+    MasterkeyFile {
+        /// Corresponds to [`DpapiKeyRecord`].
+        record: DpapiKeyRecord,
+        /// Parsed file structure.
+        file: DpapiMasterkeyFile,
+    },
+    /// G$BCKKEYLINK\{GUID} value == backup key material.
+    BackupKey {
+        /// Corresponds to [`DpapiKeyRecord`].
+        record: DpapiKeyRecord,
+        /// Backup key (feed to [`crate::crypto::dpapi::DpapiDecryptor::new`]).
+        backup_key: DpapiBackupKey,
+    },
+}
+
+impl DpapiKeySurface {
+    /// The display record regardless of the payload variant.
+    pub fn record(&self) -> &DpapiKeyRecord {
+        match self {
+            DpapiKeySurface::MasterkeyFile { record, .. } => record,
+            DpapiKeySurface::BackupKey { record, .. } => record,
+        }
+    }
+}
+
+/// Decode an LSA secret as a DPAPI key form, matching mimikatz's
+/// `lsadump::secrets` DPAPI handling. Returns `None` for non-DPAPI secret
+/// names or payloads that do not fit the expected structure.
+pub fn parse_dpapi_key_secret(name: &str, data: &[u8]) -> Option<DpapiKeySurface> {
+    if data.is_empty() {
+        return None;
+    }
+
+    let machine = name.eq_ignore_ascii_case("G$DPAPI_MACHINE_KEY");
+    let user = name.eq_ignore_ascii_case("G$DPAPI_USER_KEY");
+
+    if machine || user {
+        let file = parse_masterkey_file_bytes(data).ok()?;
+        let kind = if machine {
+            "machine-masterkey-file"
+        } else {
+            "user-masterkey-file"
+        };
+        let record = DpapiKeyRecord {
+            name: name.to_string(),
+            kind: kind.to_string(),
+            guid: format_dpapi_guid(&file.guid),
+            user_sid: Some(file.user_sid.clone()),
+            version: Some(file.version),
+            encrypted_data_len: file.encrypted_data.len(),
+            key_material_len: 0,
+            summary: format!(
+                "DPAPI masterkey ({}): {} version v{} sid={} encrypted={}",
+                if machine { "machine" } else { "user" },
+                format_dpapi_guid(&file.guid),
+                file.version,
+                file.user_sid,
+                file.encrypted_data.len()
+            ),
+        };
+        return Some(DpapiKeySurface::MasterkeyFile { record, file });
+    }
+
+    if let Some(guid_text) = name.strip_prefix("G$BCKKEYLINK\\") {
+        let guid_bytes = parse_guid_text(guid_text)?;
+        let record = DpapiKeyRecord {
+            name: name.to_string(),
+            kind: "backup-key-link".to_string(),
+            guid: format_dpapi_guid(&guid_bytes),
+            user_sid: None,
+            version: None,
+            encrypted_data_len: 0,
+            key_material_len: data.len(),
+            summary: format!(
+                "DPAPI backup key: {} ({}) size={}",
+                format_dpapi_guid(&guid_bytes),
+                guid_text.trim_matches(|c| c == '{' || c == '}'),
+                data.len()
+            ),
+        };
+        return Some(DpapiKeySurface::BackupKey {
+            record,
+            backup_key: DpapiBackupKey {
+                guid: guid_bytes,
+                key_material: data.to_vec(),
+            },
+        });
+    }
+
+    None
 }
 
 /// Format an NTDS hash entry: `domain\user:rid:lm_hash:nt_hash:::`
@@ -1494,5 +1641,235 @@ mod tests {
             nt_hash: Some("$DCC2$10240#admin#aabbccdd".to_string()),
         };
         assert!(cred.nt_hash.as_ref().unwrap().starts_with("$DCC2$"));
+    }
+
+    // -------------------------------------------------------
+    //  DPAPI key-form secrets (G$DPAPI_*_KEY / G$BCKKEYLINK)
+    // -------------------------------------------------------
+
+    /// Synthetic `G$DPAPI_MACHINE_KEY` value: masterkey-file layout
+    /// (version u32 LE + GUID 16B + unknown 8B + UTF-16LE SID + NUL +
+    /// 8-byte align + encrypted payload).
+    fn synth_masterkey_file(version: u32, guid: [u8; 16]) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&version.to_le_bytes());
+        v.extend_from_slice(&guid);
+        v.extend_from_slice(&[0u8; 8]);
+        for ch in "S-1-5-21-3623811015-3361044348-30300820-1013".encode_utf16() {
+            v.extend_from_slice(&ch.to_le_bytes());
+        }
+        v.extend_from_slice(&[0u8, 0u8]); // NUL terminator
+        while v.len() % 8 != 0 {
+            v.push(0);
+        }
+        v.extend_from_slice(&[0xAAu8; 64]);
+        v
+    }
+
+    const FIXTURE_GUID: [u8; 16] = [
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xEF,
+        0x01,
+    ];
+
+    #[test]
+    fn test_parse_dpapi_machine_key() {
+        let data = synth_masterkey_file(3, FIXTURE_GUID);
+        let surface = parse_dpapi_key_secret("G$DPAPI_MACHINE_KEY", &data)
+            .expect("machine key decodes as masterkey file");
+        match surface {
+            DpapiKeySurface::MasterkeyFile { record, file } => {
+                assert_eq!(record.kind, "machine-masterkey-file");
+                assert_eq!(file.version, 3);
+                assert_eq!(file.guid, FIXTURE_GUID);
+                assert_eq!(
+                    file.user_sid, "S-1-5-21-3623811015-3361044348-30300820-1013",
+                    "SID decoded from UTF-16LE"
+                );
+                assert_eq!(file.encrypted_data.len(), 64);
+                assert!(
+                    record.summary.contains("machine"),
+                    "summary: {}",
+                    record.summary
+                );
+                assert!(record.summary.contains(&record.guid));
+                assert!(record.summary.contains("S-1-5-21"));
+            }
+            other => panic!("expected MasterkeyFile, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_dpapi_user_key() {
+        let data = synth_masterkey_file(2, FIXTURE_GUID);
+        let surface = parse_dpapi_key_secret("G$DPAPI_USER_KEY", &data).expect("user key decodes");
+        match surface {
+            DpapiKeySurface::MasterkeyFile { record, file } => {
+                assert_eq!(record.kind, "user-masterkey-file");
+                assert_eq!(file.version, 2);
+                assert!(
+                    record.summary.contains("user"),
+                    "summary: {}",
+                    record.summary
+                );
+            }
+            other => panic!("expected MasterkeyFile, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_dpapi_machine_key_case_insensitive_name() {
+        let data = synth_masterkey_file(3, FIXTURE_GUID);
+        assert!(parse_dpapi_key_secret("g$dpapi_machine_key", &data).is_some());
+        assert!(parse_dpapi_key_secret("G$dpapi_user_key", &data).is_some());
+    }
+
+    #[test]
+    fn test_parse_dpapi_backup_key_link() {
+        // Secret name carries the GUID text; value carries key material.
+        let name = "G$BCKKEYLINK\\{44332211-6655-8877-1122-334455667788}";
+        let material: Vec<u8> = (0u8..=63).collect();
+        let surface = parse_dpapi_key_secret(name, &material).expect("backup key link decodes");
+        match surface {
+            DpapiKeySurface::BackupKey { record, backup_key } => {
+                assert_eq!(record.kind, "backup-key-link");
+                assert_eq!(backup_key.key_material, material);
+                assert_eq!(backup_key.key_material.len(), 64);
+                // GUID text -> bytes -> back to text (mixed-endian format)
+                assert_eq!(
+                    record.guid, "{44332211-6655-8877-1122-334455667788}",
+                    "GUID round-trips through the on-disk form"
+                );
+                assert!(
+                    record.summary.contains("backup key"),
+                    "summary: {}",
+                    record.summary
+                );
+                assert!(record.summary.contains("size=64"));
+            }
+            other => panic!("expected BackupKey, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_dpapi_key_secret_rejects_foreign_names() {
+        let data = synth_masterkey_file(3, FIXTURE_GUID);
+        assert!(parse_dpapi_key_secret("_SC_SqlServer", &data).is_none());
+        assert!(parse_dpapi_key_secret("$MACHINE.ACC", &data).is_none());
+        assert!(parse_dpapi_key_secret("DefaultPassword", &data).is_none());
+        // BCKKEYLINK with a malformed GUID in the name
+        assert!(parse_dpapi_key_secret("G$BCKKEYLINK\\not-a-guid", &data).is_none());
+    }
+
+    #[test]
+    fn test_parse_dpapi_key_secret_rejects_bad_payloads() {
+        assert!(parse_dpapi_key_secret("G$DPAPI_MACHINE_KEY", &[]).is_none());
+        // Too short for the masterkey header
+        assert!(parse_dpapi_key_secret("G$DPAPI_MACHINE_KEY", &[0u8; 16]).is_none());
+        // Unsupported version
+        let bad_version = {
+            let mut v = synth_masterkey_file(3, FIXTURE_GUID);
+            v[0] = 9;
+            v
+        };
+        assert!(parse_dpapi_key_secret("G$DPAPI_MACHINE_KEY", &bad_version).is_none());
+        // Empty backup key material
+        assert!(
+            parse_dpapi_key_secret("G$BCKKEYLINK\\{44332211-6655-8877-1122-334455667788}", &[])
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_dpapi_guid_round_trip() {
+        for text in [
+            "{44332211-6655-8877-1122-334455667788}",
+            "{00000000-0000-0000-0000-000000000000}",
+            "{FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF}",
+            "12345678-9abc-def0-1122-334455667788",
+        ] {
+            let bytes = parse_guid_text(text).expect("valid text GUID parses");
+            let formatted = format_dpapi_guid(&bytes);
+            let expected = format!(
+                "{{{}}}",
+                text.trim_matches(|c| c == '{' || c == '}').to_lowercase()
+            );
+            assert_eq!(formatted.to_lowercase(), expected, "round trip of {text}");
+        }
+    }
+
+    #[test]
+    fn test_format_dpapi_guid_mixed_endian() {
+        // Data1/Data2/Data3 little-endian on disk; Data4 as-is
+        let bytes = parse_guid_text("44332211-6655-8877-1122-334455667788").unwrap();
+        assert_eq!(
+            bytes,
+            [
+                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
+                0x77, 0x88
+            ]
+        );
+        assert_eq!(
+            format_dpapi_guid(&bytes),
+            "{44332211-6655-8877-1122-334455667788}"
+        );
+    }
+
+    #[test]
+    fn test_parse_guid_text_rejects_garbage() {
+        assert!(parse_guid_text("").is_none());
+        assert!(parse_guid_text("zz-11").is_none());
+        assert!(parse_guid_text("{short}").is_none());
+        assert!(parse_guid_text("0123456789abcdef0123456789abcdef0").is_none());
+        assert!(parse_guid_text("not a guid").is_none());
+    }
+
+    #[test]
+    fn test_classify_dpapi_key_forms() {
+        assert_eq!(
+            classify_lsa_secret("G$DPAPI_MACHINE_KEY"),
+            "DPAPI Masterkey File (machine)"
+        );
+        assert_eq!(
+            classify_lsa_secret("G$DPAPI_USER_KEY"),
+            "DPAPI Masterkey File (user)"
+        );
+        assert_eq!(
+            classify_lsa_secret("G$BCKKEYLINK\\{44332211-6655-8877-1122-334455667788}"),
+            "DPAPI Backup Key Link"
+        );
+        // Pre-existing DPAPI classification unchanged
+        assert_eq!(
+            classify_lsa_secret("DPAPI_SYSTEM"),
+            "DPAPI Master Key Backup"
+        );
+    }
+
+    #[test]
+    fn test_dpapi_key_record_roundtrip() {
+        let data = synth_masterkey_file(4, FIXTURE_GUID);
+        let surface = parse_dpapi_key_secret("G$DPAPI_MACHINE_KEY", &data).unwrap();
+        let record = match &surface {
+            DpapiKeySurface::MasterkeyFile { record, .. } => record,
+            _ => unreachable!(),
+        };
+        let json = serde_json::to_string(record).unwrap();
+        let back: DpapiKeyRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(*record, back);
+    }
+
+    #[test]
+    fn test_dump_lsa_dpapi_summary_surface() {
+        // parse_dpapi_key_secret must agree between detection (is_some) and
+        // the summarizing branch inside dump_lsa. Exercise the same logic the
+        // dump loop performs (without needing a full synthetic hive).
+        let data = synth_masterkey_file(3, FIXTURE_GUID);
+        let surface = parse_dpapi_key_secret("G$DPAPI_MACHINE_KEY", &data).unwrap();
+        let summary = match &surface {
+            DpapiKeySurface::MasterkeyFile { record, .. } => record.summary.clone(),
+            _ => unreachable!(),
+        };
+        assert!(summary.starts_with("DPAPI masterkey (machine):"));
+        assert!(summary.contains(&format_dpapi_guid(&FIXTURE_GUID)));
+        assert!(summary.contains("encrypted=64"));
     }
 }

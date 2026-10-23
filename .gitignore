@@ -70,8 +70,8 @@ loot/
 *.pfx
 *.p12
 
-# NTDS / registry dumps
-ntds*
+# NTDS / registry dumps (engagement outputs at repo root; ntds_dit.rs is SOURCE and stays tracked)
+/ntds*
 *.ntds
 *.hive
 *.reg
@@ -114,3 +114,6 @@ check_sql.bat
 discover.ps1
 switch-network.sh
 scripts/
+
+# Internal-only working docs
+PARITY_AUDIT.md

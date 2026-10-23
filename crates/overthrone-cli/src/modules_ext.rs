@@ -1169,9 +1169,10 @@ impl OvtModule for ZerologonModule {
  setting the computer account password to empty.\n\
  Remediation: Install KB4565503 / KB4565349 / KB4565511 and enable \
  'Domain controller: Allow vulnerable Netlogon secure channel connections' = 0.\n\
- Exploitation: Use 'ovt module run zerologon -t {} -d {} -u {} -p <pass>' \
- with --params '{{\"exploit\":true}}\"...",
-                    error_code, target, creds.domain, creds.username
+ Exploitation: 'ovt zerologon exploit -t {} --force' (DESTRUCTIVE: empties \
+ the DC machine account password -- DCSync immediately, then restore with \
+ the original NT hash).",
+                    error_code, target
                 ),
             )
         } else {

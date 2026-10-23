@@ -4,7 +4,7 @@
 > This assessment was conducted against GOAD-Light running Windows Server 2019 domain controllers.
 
 **Date:** 2026-07-24 (Updated: MS-EVEN RPC bind fix + is_bind_accepted sec_addr parsing + live-tested against GOAD-Light WS2019 DC
-**Tool Version:** Overthrone v0.4.9
+**Tool Version:** Overthrone v0.5.0
 **Target:** GOAD-Light VMWare Lab (VMnet2: 192.168.57.0/24)
 **Classification:** Internal Penetration Test — Authorized Assessment
 

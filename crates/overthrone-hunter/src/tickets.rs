@@ -9,9 +9,9 @@
 //! - Inspect ticket metadata (principal, etype, expiry)
 
 use crate::runner::HuntConfig;
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use colored::Colorize;
-use kerberos_asn1::{Asn1Object, Ticket};
+use kerberos_asn1::{Asn1Object, EncKrbCredPart, KerberosTime, KrbCred, Ticket};
 use overthrone_core::error::{OverthroneError, Result};
 use overthrone_core::proto::kerberos::{self, TicketGrantingData};
 use serde::{Deserialize, Serialize};
@@ -758,6 +758,300 @@ pub async fn handle_request(config: &HuntConfig, request: &TicketRequest) -> Res
 }
 
 // ===========================================================
+// Ticket Description (describeTicket.py / Rubeus describe parity)
+// ===========================================================
+
+/// Full description of a parsed ticket file.
+/// Extracts client, service, principal, flags, encryption types, session
+/// key, and ticket lifetimes from KIRBI (KRB-CRED), raw Ticket ASN.1, or
+/// MIT ccache v4 containers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TicketDescription {
+    /// Container format: `kirbi`, `raw_ticket`, or `ccache`
+    pub format: String,
+    /// Size of the source file in bytes
+    pub byte_size: usize,
+    /// Number of tickets carried by the container
+    pub ticket_count: usize,
+    /// Client principal (empty when unknown)
+    pub client_principal: String,
+    /// Client realm (empty when unknown)
+    pub client_realm: String,
+    /// Service principal (components joined by `/`)
+    pub service_principal: String,
+    /// Service realm
+    pub service_realm: String,
+    /// True when the service principal is `krbtgt/*`
+    pub is_tgt: bool,
+    /// Raw ticket flags (0 when unknown)
+    pub flags: u32,
+    /// Decoded ticket flag names
+    pub flag_names: Vec<String>,
+    /// Session key encryption type (0 when unknown)
+    pub session_key_etype: i32,
+    /// Session key material, hex encoded (None when unknown)
+    pub session_key_hex: Option<String>,
+    /// Ticket enc-part encryption type
+    pub ticket_etype: i32,
+    /// Ticket enc-part kvno
+    pub kvno: Option<u32>,
+    /// Whether the container enc-part is stored plaintext (KRB-CRED etype 0)
+    pub enc_part_plaintext: Option<bool>,
+    /// Authentication time
+    pub authtime: Option<String>,
+    /// Validity start time
+    pub starttime: Option<String>,
+    /// Expiry time
+    pub endtime: Option<String>,
+    /// Renewal window close time
+    pub renew_till: Option<String>,
+    /// Computed expiry status (None when unknown)
+    pub expired: Option<bool>,
+    /// Seconds until expiry, negative when expired (None when unknown)
+    pub seconds_to_expiry: Option<i64>,
+}
+
+/// RFC 4120 ticket flag names, ordered by flag position.
+const FLAG_TABLE: &[(u32, &str)] = &[
+    (0x4000_0000, "forwardable"),
+    (0x2000_0000, "forwarded"),
+    (0x1000_0000, "proxiable"),
+    (0x0800_0000, "proxy"),
+    (0x0400_0000, "may-postdate"),
+    (0x0200_0000, "post-dated"),
+    (0x0100_0000, "invalid"),
+    (0x0080_0000, "renewable"),
+    (0x0040_0000, "initial"),
+    (0x0020_0000, "pre-authent"),
+    (0x0010_0000, "hw-authent"),
+    (0x0008_0000, "transited-policy-checked"),
+    (0x0004_0000, "ok-as-delegate"),
+    (0x0002_0000, "anonymous"),
+];
+
+/// Decode RFC 4120 ticket flags into names (pure).
+pub fn ticket_flag_names(flags: u32) -> Vec<&'static str> {
+    FLAG_TABLE
+        .iter()
+        .filter(|(mask, _)| flags & mask != 0)
+        .map(|(_, name)| *name)
+        .collect()
+}
+
+/// Human-readable encryption type name (pure).
+pub fn etype_name(etype: i32) -> &'static str {
+    match etype {
+        0 => "none (plaintext/not encrypted)",
+        1 => "des-cbc-crc",
+        2 => "des-cbc-md4",
+        3 => "des-cbc-md5",
+        5 => "des3-cbc-md5",
+        16 => "des3-cbc-sha1",
+        17 => "aes128-cts-hmac-sha1-96",
+        18 => "aes256-cts-hmac-sha1-96",
+        23 => "rc4-hmac",
+        24 => "rc4-hmac-exp",
+        25 => "camellia128-cts-hmac-sha1-96",
+        26 => "camellia256-cts-hmac-sha1-96",
+        65 => "rc4-hmac-old-exp",
+        135 => "aes128-cts-hmac-sha256-128",
+        136 => "aes256-cts-hmac-sha384-192",
+        _ => "unknown etype",
+    }
+}
+
+/// Build the base description from a bare ticket (service info only).
+fn describe_from_ticket(ticket: &Ticket) -> TicketDescription {
+    let is_tgt = ticket
+        .sname
+        .name_string
+        .first()
+        .map(|p| p.eq_ignore_ascii_case("krbtgt"))
+        .unwrap_or(false);
+    TicketDescription {
+        format: String::new(),
+        byte_size: 0,
+        ticket_count: 0,
+        client_principal: String::new(),
+        client_realm: String::new(),
+        service_principal: ticket.sname.name_string.join("/"),
+        service_realm: ticket.realm.clone(),
+        is_tgt,
+        flags: 0,
+        flag_names: Vec::new(),
+        session_key_etype: 0,
+        session_key_hex: None,
+        ticket_etype: ticket.enc_part.etype,
+        kvno: ticket.enc_part.kvno,
+        enc_part_plaintext: None,
+        authtime: None,
+        starttime: None,
+        endtime: None,
+        renew_till: None,
+        expired: None,
+        seconds_to_expiry: None,
+    }
+}
+
+fn opt_time_str(t: &Option<KerberosTime>) -> Option<String> {
+    t.as_ref()
+        .map(|v| v.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+}
+
+fn expiry_of(t: &Option<KerberosTime>) -> (Option<bool>, Option<i64>) {
+    match t.as_ref().map(|v| v.timestamp()) {
+        Some(epoch) => {
+            let delta = epoch - Utc::now().timestamp();
+            (Some(delta < 0), Some(delta))
+        }
+        None => (None, None),
+    }
+}
+
+/// Embedded ccache time fields parsed by `parse_ccache_times`.
+struct CcacheTimes {
+    authtime: i64,
+    starttime: i64,
+    endtime: i64,
+    renew_till: i64,
+    flags: u32,
+}
+
+/// Walk a ccache v4 credential entry to extract the four epoch-times plus
+/// the ticket flags (mirrors the `from_ccache` cursor walk).
+fn parse_ccache_times(data: &[u8]) -> Result<CcacheTimes> {
+    if data.len() < 4 {
+        return Err(OverthroneError::Kerberos("ccache too small".to_string()));
+    }
+    if data[0] != 0x05 || data[1] != 0x04 {
+        return Err(OverthroneError::Kerberos(format!(
+            "invalid ccache version: 0x{:02X}{:02X}",
+            data[0], data[1]
+        )));
+    }
+    let mut pos: usize = 2;
+    let header_len = read_u16_be(data, &mut pos)? as usize;
+    if pos + header_len > data.len() {
+        return Err(OverthroneError::Kerberos(
+            "ccache header truncated".to_string(),
+        ));
+    }
+    pos += header_len;
+
+    let _ = read_ccache_principal(data, &mut pos)?; // default principal
+    let _ = read_ccache_principal(data, &mut pos)?; // client principal
+    let _ = read_ccache_principal(data, &mut pos)?; // server principal
+    let _ = read_ccache_keyblock(data, &mut pos)?; // session key
+
+    let authtime = read_u32_be(data, &mut pos)? as i64;
+    let starttime = read_u32_be(data, &mut pos)? as i64;
+    let endtime = read_u32_be(data, &mut pos)? as i64;
+    let renew_till = read_u32_be(data, &mut pos)? as i64;
+
+    if pos >= data.len() {
+        return Err(OverthroneError::Kerberos(
+            "ccache credential truncated at is_skey".to_string(),
+        ));
+    }
+    pos += 1; // is_skey
+    let flags = read_u32_be(data, &mut pos)?;
+    Ok(CcacheTimes {
+        authtime,
+        starttime,
+        endtime,
+        renew_till,
+        flags,
+    })
+}
+
+/// Format a Unix epoch into UTC display form (pure).
+fn epoch_fmt(epoch: i64) -> Option<String> {
+    DateTime::from_timestamp(epoch, 0).map(|dt| dt.format("%Y-%m-%d %H:%M:%S UTC").to_string())
+}
+
+/// Describe any supported ticket container: KRB-CRED (kirbi), bare Ticket
+/// ASN.1, or MIT ccache v4.
+pub fn describe_ticket(data: &[u8]) -> Result<TicketDescription> {
+    if let Ok((_, cred)) = KrbCred::parse(data)
+        && !cred.tickets.is_empty()
+    {
+        let mut d = describe_from_ticket(&cred.tickets[0]);
+        d.format = "kirbi".to_string();
+        d.ticket_count = cred.tickets.len();
+        d.byte_size = data.len();
+        d.enc_part_plaintext = Some(cred.enc_part.etype == 0);
+        if cred.enc_part.etype == 0
+            && let Ok((_, enc)) = EncKrbCredPart::parse(&cred.enc_part.cipher)
+            && let Some(info) = enc.ticket_info.first()
+        {
+            d.client_principal = info
+                .pname
+                .as_ref()
+                .map(|p| p.name_string.join("/"))
+                .unwrap_or_default();
+            d.client_realm = info.prealm.clone().unwrap_or_default();
+            if let Some(f) = info.flags.as_ref() {
+                d.flags = f.flags;
+                d.flag_names = ticket_flag_names(d.flags)
+                    .into_iter()
+                    .map(String::from)
+                    .collect();
+            }
+            d.session_key_etype = info.key.keytype;
+            d.session_key_hex = Some(hex::encode(&info.key.keyvalue));
+            d.authtime = opt_time_str(&info.authtime);
+            d.starttime = opt_time_str(&info.starttime);
+            d.endtime = opt_time_str(&info.endtime);
+            d.renew_till = opt_time_str(&info.renew_till);
+            let (expired, delta) = expiry_of(&info.endtime);
+            d.expired = expired;
+            d.seconds_to_expiry = delta;
+        }
+        return Ok(d);
+    }
+
+    if let Ok((_, ticket)) = Ticket::parse(data) {
+        let mut d = describe_from_ticket(&ticket);
+        d.format = "raw_ticket".to_string();
+        d.ticket_count = 1;
+        d.byte_size = data.len();
+        d.enc_part_plaintext = Some(false);
+        return Ok(d);
+    }
+
+    if data.len() >= 2 && data[0] == 0x05 && data[1] == 0x04 {
+        let tgd = from_ccache(data)?;
+        let mut d = describe_from_ticket(&tgd.ticket);
+        d.format = "ccache".to_string();
+        d.ticket_count = 1;
+        d.byte_size = data.len();
+        d.client_principal = tgd.client_principal.clone();
+        d.client_realm = tgd.client_realm.clone();
+        d.session_key_etype = tgd.session_key_etype;
+        d.session_key_hex = Some(hex::encode(&tgd.session_key));
+        if let Ok(times) = parse_ccache_times(data) {
+            d.flags = times.flags;
+            d.flag_names = ticket_flag_names(times.flags)
+                .into_iter()
+                .map(String::from)
+                .collect();
+            d.authtime = epoch_fmt(times.authtime);
+            d.starttime = epoch_fmt(times.starttime);
+            d.endtime = epoch_fmt(times.endtime);
+            d.renew_till = epoch_fmt(times.renew_till);
+            let delta = times.endtime - Utc::now().timestamp();
+            d.seconds_to_expiry = Some(delta);
+            d.expired = Some(delta < 0);
+        }
+        return Ok(d);
+    }
+
+    Err(OverthroneError::Kerberos(
+        "unrecognized ticket format (not KRB-CRED, Ticket, or ccache)".to_string(),
+    ))
+}
+
+// ===========================================================
 // Tests
 // ===========================================================
 
@@ -802,5 +1096,277 @@ mod tests {
     fn test_format_extension() {
         assert_eq!(TicketFormat::Kirbi.extension(), "kirbi");
         assert_eq!(TicketFormat::CCache.extension(), "ccache");
+    }
+
+    // -----------------------------------------------------------
+    // Ticket description (describe-ticket engine)
+    // -----------------------------------------------------------
+
+    fn test_ticket(realm: &str, tgt: bool) -> Ticket {
+        let service = if tgt { "krbtgt" } else { "cifs" };
+        let mut sname = kerberos_asn1::PrincipalName::new(2, service.to_string());
+        sname.push(realm.to_string());
+        let enc = kerberos_asn1::EncryptedData::new(18, Some(5), vec![0xAA; 24]);
+        Ticket::new(realm.to_string(), sname, enc)
+    }
+
+    fn test_future_kerb_time() -> KerberosTime {
+        let dt = Utc::now() + chrono::TimeDelta::try_hours(10).unwrap();
+        KerberosTime::from(dt)
+    }
+
+    fn test_tgd() -> TicketGrantingData {
+        TicketGrantingData {
+            ticket: test_ticket("CORP.LOCAL", true),
+            session_key: vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04],
+            session_key_etype: 18,
+            client_principal: "alice".to_string(),
+            client_realm: "CORP.LOCAL".to_string(),
+            end_time: Some(test_future_kerb_time()),
+        }
+    }
+
+    #[test]
+    fn test_ticket_flag_names_typical() {
+        // 0x40e10000 = forwardable | renewable | initial | pre-authent
+        let names = ticket_flag_names(0x40e10000);
+        assert_eq!(names.len(), 4);
+        assert!(names.contains(&"forwardable"));
+        assert!(names.contains(&"renewable"));
+        assert!(names.contains(&"initial"));
+        assert!(names.contains(&"pre-authent"));
+        assert!(!names.contains(&"forwarded"));
+        assert!(!names.contains(&"ok-as-delegate"));
+    }
+
+    #[test]
+    fn test_ticket_flag_names_zero_and_full() {
+        assert!(ticket_flag_names(0).is_empty());
+        let full = ticket_flag_names(u32::MAX);
+        assert_eq!(full.len(), FLAG_TABLE.len());
+        assert!(full.contains(&"anonymous"));
+    }
+
+    #[test]
+    fn test_ticket_flag_names_known_flags() {
+        assert_eq!(ticket_flag_names(0x40000000), vec!["forwardable"]);
+        assert_eq!(ticket_flag_names(0x00800000), vec!["renewable"]);
+        assert_eq!(ticket_flag_names(0x00040000), vec!["ok-as-delegate"]);
+    }
+
+    #[test]
+    fn test_etype_names() {
+        assert_eq!(etype_name(18), "aes256-cts-hmac-sha1-96");
+        assert_eq!(etype_name(17), "aes128-cts-hmac-sha1-96");
+        assert_eq!(etype_name(23), "rc4-hmac");
+        assert_eq!(etype_name(0), "none (plaintext/not encrypted)");
+        assert_eq!(etype_name(135), "aes128-cts-hmac-sha256-128");
+        assert_eq!(etype_name(136), "aes256-cts-hmac-sha384-192");
+        assert_eq!(etype_name(3), "des-cbc-md5");
+        assert_eq!(etype_name(9999), "unknown etype");
+    }
+
+    #[test]
+    fn test_describe_kirbi_plaintext() {
+        // Build a kirbi with every KrbCredInfo field populated
+        let now = Utc::now();
+        let info = kerberos_asn1::KrbCredInfo {
+            key: kerberos_asn1::EncryptionKey {
+                keytype: 18,
+                keyvalue: vec![0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04],
+            },
+            prealm: Some("CORP.LOCAL".to_string()),
+            pname: Some(kerberos_asn1::PrincipalName {
+                name_type: 1,
+                name_string: vec!["alice".to_string()],
+            }),
+            flags: Some(0x40e10000u32.into()),
+            authtime: Some(KerberosTime::from(now)),
+            starttime: Some(KerberosTime::from(now)),
+            endtime: Some(KerberosTime::from(
+                now + chrono::TimeDelta::try_hours(10).unwrap(),
+            )),
+            renew_till: Some(KerberosTime::from(
+                now + chrono::TimeDelta::try_hours(24 * 7).unwrap(),
+            )),
+            srealm: Some("CORP.LOCAL".to_string()),
+            sname: Some(kerberos_asn1::PrincipalName {
+                name_type: 2,
+                name_string: vec!["krbtgt".to_string(), "CORP.LOCAL".to_string()],
+            }),
+            caddr: None,
+        };
+        let enc = kerberos_asn1::EncKrbCredPart {
+            ticket_info: vec![info],
+            nonce: None,
+            timestamp: None,
+            usec: None,
+            s_address: None,
+            r_address: None,
+        };
+        let cred = KrbCred {
+            pvno: 5,
+            msg_type: 22,
+            tickets: vec![test_ticket("CORP.LOCAL", true)],
+            enc_part: kerberos_asn1::EncryptedData {
+                etype: 0,
+                kvno: None,
+                cipher: enc.build(),
+            },
+        };
+        let raw = cred.build();
+
+        let d = describe_ticket(&raw).expect("describe kirbi");
+        assert_eq!(d.format, "kirbi");
+        assert_eq!(d.ticket_count, 1);
+        assert_eq!(d.client_principal, "alice");
+        assert_eq!(d.client_realm, "CORP.LOCAL");
+        assert_eq!(d.service_principal, "krbtgt/CORP.LOCAL");
+        assert_eq!(d.service_realm, "CORP.LOCAL");
+        assert!(d.is_tgt);
+        assert_eq!(d.ticket_etype, 18);
+        assert_eq!(d.kvno, Some(5));
+        assert_eq!(d.session_key_etype, 18);
+        assert_eq!(d.session_key_hex.as_deref().unwrap(), "deadbeef01020304");
+        assert_eq!(d.enc_part_plaintext, Some(true));
+        assert_eq!(d.flags, 0x40e10000);
+        assert!(d.flag_names.iter().any(|f| f == "forwardable"));
+        assert!(d.flag_names.iter().any(|f| f == "renewable"));
+        assert!(d.flag_names.iter().any(|f| f == "initial"));
+        assert!(d.flag_names.iter().any(|f| f == "pre-authent"));
+        assert_eq!(d.flag_names.len(), 4);
+        assert!(d.authtime.is_some());
+        assert!(d.starttime.is_some());
+        assert!(d.endtime.is_some());
+        assert!(d.renew_till.is_some());
+        assert_eq!(d.expired, Some(false));
+        assert!(d.seconds_to_expiry.unwrap() > 0);
+    }
+
+    #[test]
+    fn test_describe_kirbi_flags_match_credential() {
+        let kirbi = to_kirbi(&test_tgd());
+        let d = describe_ticket(&kirbi).expect("describe kirbi");
+        // to_kirbi stores the credential flags from the KrbCredInfo
+        let decoded = ticket_flag_names(d.flags);
+        assert_eq!(
+            d.flag_names.as_slice(),
+            decoded.iter().map(|s| s.to_string()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_describe_kirbi_encrypted_enc_part() {
+        // Build a KRB-CRED whose enc-part etype != 0 (no KrbCredInfo to read)
+        let tgd = test_tgd();
+        let cred = KrbCred {
+            pvno: 5,
+            msg_type: 22,
+            tickets: vec![tgd.ticket.clone()],
+            enc_part: kerberos_asn1::EncryptedData::new(18, None, vec![0xBB; 40]),
+        };
+        let raw = cred.build();
+        let d = describe_ticket(&raw).expect("describe encrypted kirbi");
+        assert_eq!(d.format, "kirbi");
+        assert_eq!(d.enc_part_plaintext, Some(false));
+        assert!(d.client_principal.is_empty());
+        assert!(d.session_key_hex.is_none());
+        assert!(d.flag_names.is_empty());
+        assert_eq!(d.service_principal, "krbtgt/CORP.LOCAL");
+        assert_eq!(d.ticket_etype, 18);
+    }
+
+    #[test]
+    fn test_describe_raw_ticket() {
+        let ticket = test_ticket("SEVENKINGDOMS.LOCAL", false);
+        let raw = ticket.build();
+        let d = describe_ticket(&raw).expect("describe raw ticket");
+        assert_eq!(d.format, "raw_ticket");
+        assert_eq!(d.ticket_count, 1);
+        assert_eq!(d.service_principal, "cifs/SEVENKINGDOMS.LOCAL");
+        assert_eq!(d.service_realm, "SEVENKINGDOMS.LOCAL");
+        assert!(!d.is_tgt);
+        assert_eq!(d.ticket_etype, 18);
+        assert_eq!(d.kvno, Some(5));
+        assert!(d.client_principal.is_empty());
+    }
+
+    #[test]
+    fn test_describe_ccache() {
+        let ccache = to_ccache(&test_tgd());
+        let d = describe_ticket(&ccache).expect("describe ccache");
+        assert_eq!(d.format, "ccache");
+        assert_eq!(d.client_principal, "alice");
+        assert_eq!(d.client_realm, "CORP.LOCAL");
+        assert_eq!(d.service_principal, "krbtgt/CORP.LOCAL");
+        assert!(d.is_tgt);
+        assert_eq!(d.session_key_etype, 18);
+        assert_eq!(d.session_key_hex.as_deref().unwrap(), "deadbeef01020304");
+        // ccache writer sets forwardable|renewable flags
+        assert!(d.flag_names.iter().any(|f| f == "forwardable"));
+        assert!(d.flag_names.iter().any(|f| f == "renewable"));
+        // times are written relative to now: not expired
+        assert_eq!(d.expired, Some(false));
+        assert!(d.endtime.is_some());
+        assert!(d.authtime.is_some());
+    }
+
+    #[test]
+    fn test_describe_expired_ticket() {
+        // Future endtime -> not expired
+        let tgd = test_tgd();
+        let kirbi = to_kirbi(&tgd);
+        let d = describe_ticket(&kirbi).expect("describe future kirbi");
+        assert_eq!(d.expired, Some(false));
+
+        // Force an expired endtime (epoch 1000) inside the credential info
+        let cred = KrbCred::parse(&kirbi).expect("parse").1;
+        let (_, parsed_enc) = EncKrbCredPart::parse(&cred.enc_part.cipher).expect("parse enc");
+        let mut info = parsed_enc.ticket_info[0].clone();
+        info.endtime = Some(KerberosTime::from(
+            DateTime::from_timestamp(1000, 0).unwrap(),
+        ));
+        let enc = EncKrbCredPart {
+            ticket_info: vec![info],
+            nonce: None,
+            timestamp: None,
+            usec: None,
+            s_address: None,
+            r_address: None,
+        };
+        let new_cred = KrbCred {
+            pvno: 5,
+            msg_type: 22,
+            tickets: cred.tickets.clone(),
+            enc_part: kerberos_asn1::EncryptedData {
+                etype: 0,
+                kvno: None,
+                cipher: enc.build(),
+            },
+        };
+        let raw = new_cred.build();
+        let d = describe_ticket(&raw).expect("describe expired kirbi");
+        assert_eq!(d.expired, Some(true));
+        assert!(d.seconds_to_expiry.unwrap() < 0);
+    }
+
+    #[test]
+    fn test_describe_ticket_unknown_format() {
+        assert!(describe_ticket(b"\x00\x01\x02\x03").is_err());
+        assert!(describe_ticket(b"not a ticket at all really no").is_err());
+    }
+
+    #[test]
+    fn test_ccache_times_roundtrip() {
+        let ccache = to_ccache(&test_tgd());
+        let times = parse_ccache_times(&ccache).expect("parse times");
+        // endtime should be roughly now + 10h (within a small window)
+        let expected = Utc::now().timestamp() + 36000;
+        assert!(
+            (times.endtime - expected).abs() < 86400,
+            "endtime {} vs expected {}",
+            times.endtime,
+            expected
+        );
     }
 }

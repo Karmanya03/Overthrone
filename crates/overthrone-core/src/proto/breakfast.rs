@@ -205,7 +205,7 @@ async fn build_armored_as_req(
                 .map_err(|e| OverthroneError::Kerberos(format!("BreakFAST: cipher init: {e}")))?;
 
             let decrypted = cipher
-                .decrypt(&as_rep.enc_part.cipher, 11, armor_key)
+                .decrypt(armor_key, 11, &as_rep.enc_part.cipher)
                 .map_err(|e| {
                     OverthroneError::Kerberos(format!(
                         "BreakFAST: decrypt failed (FAST key usage 11): {e}"

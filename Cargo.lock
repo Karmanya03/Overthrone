@@ -382,13 +382,13 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.89"
+version = "0.1.92"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+checksum = "82f6aeea286b8eb4dd3431a1be1b59d290ace00f5bfd8e2a159bc2a05e2c1667"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.45",
- "syn 2.0.117",
+ "syn 3.0.9",
 ]
 
 [[package]]
@@ -4009,7 +4009,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "aes 0.8.4",
  "anyhow",
@@ -4062,7 +4062,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-core"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm 0.10.3",
@@ -4132,7 +4132,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-crawler"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4159,7 +4159,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-forge"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "base64",
  "chrono",
@@ -4187,7 +4187,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-hunter"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4215,7 +4215,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-pilot"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -4241,7 +4241,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-reaper"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4265,7 +4265,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-relay"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "aes 0.8.4",
  "async-trait",
@@ -4275,6 +4275,7 @@ dependencies = [
  "futures",
  "hex",
  "hmac 0.12.1",
+ "kerberos_crypto",
  "overthrone-core",
  "rand 0.10.1",
  "rustls",
@@ -4291,7 +4292,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-scribe"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -4313,7 +4314,7 @@ dependencies = [
 
 [[package]]
 name = "overthrone-viewer"
-version = "0.4.9"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "axum 0.8.9",
@@ -5002,8 +5003,6 @@ dependencies = [
 [[package]]
 name = "printpdf"
 version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91dac59ed5eed56d899517c12cb9f00756738731926b54e513732a36f49a83d"
 dependencies = [
  "allsorts",
  "azul-core",
@@ -6854,6 +6853,17 @@ name = "syn"
 version = "2.0.117"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e665b8803e7b1d2a727f4023456bbbbe74da67099c585258af0ad9c5013b9b99"
+dependencies = [
+ "proc-macro2 1.0.106",
+ "quote 1.0.45",
+ "unicode-ident",
+]
+
+[[package]]
+name = "syn"
+version = "3.0.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d78c8dee4c7bf0e14673097256fed6142ce9d3b85a408189d07482442145823b"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.45",

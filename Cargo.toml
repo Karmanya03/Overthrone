@@ -14,7 +14,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.4.9"
+version = "0.5.0"
 edition = "2024"
 authors = ["Karmanya03"]
 license = "MIT"
@@ -117,3 +117,10 @@ tower-http = { version = "0.6", features = ["cors"] }
 # windows-future 0.3.2 which breaks on non-Windows targets.
 # Using crates.io sspi version instead for cross-platform builds.
 # Re-add once sspi-rs fixes their windows crate compatibility.
+
+# printpdf 0.9.1 upstream declares crate-type = ["cdylib", "rlib"], emitting
+# a 100k+ entry export def file that GNU ld rejects with "export ordinal too
+# large". The vendored copy drops the unnecessary cdylib target; scribe only
+# consumes the rlib API.
+[patch.crates-io]
+printpdf = { path = "vendor/printpdf-0.9.1" }

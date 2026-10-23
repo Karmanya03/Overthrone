@@ -82,7 +82,7 @@ pub use smb_reflect::{
     run_smb_reflect,
 };
 pub use spray::{SprayConfig, SprayResult, run_spray};
-pub use tickets::{TicketFormat, TicketOps};
+pub use tickets::{TicketDescription, TicketFormat, TicketOps, etype_name, ticket_flag_names};
 pub use timeroast::{
     TimeroastConfig, TimeroastHash, TimeroastResult, build_query, hashcat_format, parse_reply,
     parse_rid_ranges, run_timeroast, verify_machine_password,

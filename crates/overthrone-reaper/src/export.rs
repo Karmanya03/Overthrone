@@ -18,6 +18,8 @@ pub enum ExportFormat {
     Csv,
     /// `BloodHoundV4` variant
     BloodHoundV4,
+    /// Standalone offline HTML report (users / groups / computers / trusts)
+    Html,
 }
 
 pub async fn export_results(
@@ -41,6 +43,9 @@ pub async fn export_results(
         }
         ExportFormat::BloodHoundV4 => {
             export_bloodhound_v4(result, path).await?;
+        }
+        ExportFormat::Html => {
+            export_html(result, path).await?;
         }
     }
 
@@ -112,6 +117,206 @@ async fn export_csv(result: &ReaperResult, base: &Path) -> Result<()> {
         info!("[export] -> {}", path.display());
     }
 
+    Ok(())
+}
+
+// ----------------------------------------------
+//  HTML report export
+// ----------------------------------------------
+
+/// Escape text for HTML output.
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// Render one `<table>` with escape-safe cells.
+fn html_table(title: &str, headers: &[&str], rows: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "<h2>{}</h2>\n<table>\n<thead>\n<tr>",
+        html_escape(title)
+    ));
+    for h in headers {
+        out.push_str(&format!("<th>{}</th>", html_escape(h)));
+    }
+    out.push_str("</tr>\n</thead>\n<tbody>\n");
+    for row in rows {
+        out.push_str("<tr>");
+        for cell in row {
+            out.push_str(&format!("<td>{}</td>", html_escape(cell)));
+        }
+        out.push_str("</tr>\n");
+    }
+    out.push_str("</tbody>\n</table>\n");
+    out
+}
+
+/// Build the whole report page: summary tables for users, groups,
+/// computers, and trusts plus section counts for everything skipped.
+async fn export_html(result: &ReaperResult, base: &Path) -> Result<()> {
+    let dir = base.parent().unwrap_or(Path::new("."));
+    let stem = base
+        .file_stem()
+        .unwrap_or(OsStr::new("reaper"))
+        .to_string_lossy();
+    let path = dir.join(format!("{stem}_report.html"));
+
+    let mut body = String::new();
+
+    // Count helpers keep the summary compact.
+    let user_rows: Vec<Vec<String>> = result
+        .users
+        .iter()
+        .map(|u| {
+            vec![
+                u.sam_account_name.clone(),
+                u.enabled.to_string(),
+                u.admin_count.to_string(),
+                u.is_kerberoastable().to_string(),
+                u.is_asrep_roastable().to_string(),
+                u.user_principal_name.clone().unwrap_or_default(),
+            ]
+        })
+        .collect();
+
+    let group_rows: Vec<Vec<String>> = result
+        .groups
+        .iter()
+        .map(|g| {
+            vec![
+                g.sam_account_name.clone(),
+                match g.group_type {
+                    crate::groups::GroupKind::Global => "Global".to_string(),
+                    crate::groups::GroupKind::DomainLocal => "Domain Local".to_string(),
+                    crate::groups::GroupKind::Universal => "Universal".to_string(),
+                    crate::groups::GroupKind::BuiltIn => "BuiltIn".to_string(),
+                    crate::groups::GroupKind::Unknown(_) => "Unknown".to_string(),
+                },
+                g.members.len().to_string(),
+                g.admin_count.to_string(),
+                g.sid.clone().unwrap_or_default(),
+            ]
+        })
+        .collect();
+
+    let computer_rows: Vec<Vec<String>> = result
+        .computers
+        .iter()
+        .map(|c| {
+            vec![
+                c.sam_account_name.clone(),
+                c.dns_hostname.clone().unwrap_or_default(),
+                c.operating_system.clone().unwrap_or_default(),
+                c.enabled.to_string(),
+                c.unconstrained_delegation.to_string(),
+                c.is_domain_controller.to_string(),
+            ]
+        })
+        .collect();
+
+    let trust_rows: Vec<Vec<String>> = result
+        .trusts
+        .iter()
+        .map(|t| {
+            vec![
+                t.target_domain.clone(),
+                t.direction.to_string(),
+                t.trust_type.to_string(),
+                t.transitive.to_string(),
+                t.sid_filtering_enabled.to_string(),
+                t.tgt_delegation_enabled.to_string(),
+            ]
+        })
+        .collect();
+
+    body.push_str(&format!(
+        "<h1>Overthrone REAPER report -- {}</h1>\n<p>Base DN: {} | functional level: {}</p>\n\
+         <p>Objects: {} users, {} groups, {} computers, {} trusts | ACL findings: {} | LAPS: {} | \
+         gMSA: {} | SPNs: {} | delegations: {} | snaffle findings: {}</p>\n",
+        html_escape(&result.domain),
+        html_escape(&result.base_dn),
+        result
+            .functional_level
+            .map(|l| l.to_string())
+            .unwrap_or_else(|| "unknown".into()),
+        result.users.len(),
+        result.groups.len(),
+        result.computers.len(),
+        result.trusts.len(),
+        result.acl_findings.len(),
+        result.laps_entries.len(),
+        result.gmsa_entries.len(),
+        result.spn_accounts.len(),
+        result.delegations.len(),
+        result.snaffle_findings.len(),
+    ));
+
+    if !user_rows.is_empty() {
+        body.push_str(&html_table(
+            "Users",
+            &[
+                "sAMAccountName",
+                "enabled",
+                "adminCount",
+                "kerberoastable",
+                "as-REP roastable",
+                "UPN",
+            ],
+            &user_rows,
+        ));
+    }
+    if !group_rows.is_empty() {
+        body.push_str(&html_table(
+            "Groups",
+            &["sAMAccountName", "type", "members", "adminCount", "SID"],
+            &group_rows,
+        ));
+    }
+    if !computer_rows.is_empty() {
+        body.push_str(&html_table(
+            "Computers",
+            &[
+                "sAMAccountName",
+                "dnsHostname",
+                "os",
+                "enabled",
+                "unconstr. deleg",
+                "DC",
+            ],
+            &computer_rows,
+        ));
+    }
+    if !trust_rows.is_empty() {
+        body.push_str(&html_table(
+            "Trusts",
+            &[
+                "target domain",
+                "direction",
+                "type",
+                "transitive",
+                "SID filtering",
+                "TGT delegation",
+            ],
+            &trust_rows,
+        ));
+    }
+
+    let html = format!(
+        "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>Overthrone REAPER -- {}</title>\n\
+         <style>\nbody{{font-family:Consolas,monospace;margin:2em;background:#111;color:#ccc}}\n\
+         table{{border-collapse:collapse;margin-bottom:2em;font-size:0.9em}}\n\
+         th,td{{border:1px solid #444;padding:4px 10px;text-align:left}}\n\
+         th{{background:#262626;color:#e6e6e6}}\n\
+         tr:nth-child(even){{background:#1a1a1a}}\nh1{{color:#f33}}h2{{color:#7cc}}\n\
+         </style>\n</head>\n<body>\n{body}</body>\n</html>\n",
+        html_escape(&result.domain),
+    );
+
+    tokio::fs::write(&path, html).await?;
+    info!("[export] HTML report -> {}", path.display());
     Ok(())
 }
 
@@ -808,6 +1013,181 @@ mod tests {
             edges.len() >= 40,
             "Expected >= 40 known edges, got {}",
             edges.len()
+        );
+    }
+
+    // -------------------------------------------------------
+    //  HTML report export
+    // -------------------------------------------------------
+
+    #[test]
+    fn test_html_escape_special_chars() {
+        assert_eq!(html_escape("<script>"), "&lt;script&gt;");
+        assert_eq!(html_escape("a&b"), "a&amp;b");
+        assert_eq!(html_escape("say \"hi\""), "say &quot;hi&quot;");
+        assert_eq!(html_escape("plain cn=Users"), "plain cn=Users");
+    }
+
+    #[test]
+    fn test_html_table_renders_headers_rows_and_escapes() {
+        let table = html_table(
+            "Users",
+            &["sAMAccountName", "enabled"],
+            &[vec!["<b>evil</b>".to_string(), "true".to_string()]],
+        );
+        assert!(table.contains("<h2>Users</h2>"), "title");
+        assert!(table.contains("<th>sAMAccountName</th>"), "header");
+        assert!(table.contains("<th>enabled</th>"), "header");
+        assert!(
+            table.contains("<td>&lt;b&gt;evil&lt;/b&gt;</td>"),
+            "cell escaped: {table}"
+        );
+        assert!(!table.contains("<b>evil</b>"), "no raw angle brackets");
+    }
+
+    #[test]
+    fn test_html_table_empty_rows() {
+        let table = html_table("Empty", &["h1"], &[]);
+        assert!(table.contains("<h2>Empty</h2>"));
+        assert!(table.contains("<th>h1</th>"));
+        assert!(!table.contains("<td>"));
+    }
+
+    /// Synthetic result covering one entry of each rendered table plus a
+    /// hostile name that must come out escaped.
+    fn sample_result() -> ReaperResult {
+        use crate::computers::ComputerEntry;
+        use crate::groups::{GroupEntry, GroupKind};
+        use crate::trusts::{TrustDirection, TrustEntry, TrustType};
+        use crate::users::UserEntry;
+
+        ReaperResult {
+            domain: "corp.local".into(),
+            base_dn: "DC=corp,DC=local".into(),
+            functional_level: Some(7),
+            users: vec![UserEntry {
+                sam_account_name: "svc.sql<i>inject</i>".into(),
+                enabled: true,
+                admin_count: true,
+                ..Default::default()
+            }],
+            groups: vec![GroupEntry {
+                sam_account_name: "Domain Admins".into(),
+                group_type: GroupKind::BuiltIn,
+                admin_count: true,
+                sid: Some("S-1-5-32-544".into()),
+                ..Default::default()
+            }],
+            computers: vec![ComputerEntry {
+                sam_account_name: "DC01$".into(),
+                is_domain_controller: true,
+                unconstrained_delegation: true,
+                ..Default::default()
+            }],
+            trusts: vec![TrustEntry {
+                target_domain: "forest.corp.local".into(),
+                direction: TrustDirection::Bidirectional,
+                trust_type: TrustType::Forest,
+                ..Default::default()
+            }],
+            ..sample_result_shell()
+        }
+    }
+
+    fn sample_result_shell() -> ReaperResult {
+        ReaperResult {
+            domain: String::new(),
+            base_dn: String::new(),
+            functional_level: None,
+            users: Vec::new(),
+            groups: Vec::new(),
+            computers: Vec::new(),
+            ous: Vec::new(),
+            gpos: Vec::new(),
+            trusts: Vec::new(),
+            policy: None,
+            spn_accounts: Vec::new(),
+            delegations: Vec::new(),
+            acl_findings: Vec::new(),
+            laps_entries: Vec::new(),
+            gmsa_entries: Vec::new(),
+            snaffle_findings: Vec::new(),
+            powerview_results: None,
+            mssql_instances: Vec::new(),
+            adcs_templates: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_export_html_roundtrip() {
+        use tokio_test::block_on;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("engagement");
+        block_on(export_results(&sample_result(), &base, ExportFormat::Html)).unwrap();
+
+        let report = dir.path().join("engagement_report.html");
+        assert!(report.exists(), "html report written next to the base stem");
+        let html = std::fs::read_to_string(&report).unwrap();
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.contains("<h1>Overthrone REAPER report -- corp.local</h1>"));
+        assert!(html.contains("Base DN: DC=corp,DC=local"));
+        assert!(html.contains("<h2>Users</h2>"));
+        assert!(html.contains("<h2>Groups</h2>"));
+        assert!(html.contains("<h2>Computers</h2>"));
+        assert!(html.contains("<h2>Trusts</h2>"));
+        assert!(
+            html.contains("svc.sql&lt;i&gt;inject&lt;/i&gt;"),
+            "hostile name escaped"
+        );
+        assert!(!html.contains("svc.sql<i>inject</i>"), "never raw html");
+        assert!(html.contains("Domain Admins"));
+        assert!(html.contains("S-1-5-32-544"));
+        assert!(html.contains("forest.corp.local"));
+        assert!(html.contains("Bidirectional"));
+    }
+
+    #[test]
+    fn test_export_html_empty_result_has_no_tables() {
+        use tokio_test::block_on;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("empty");
+        block_on(export_results(
+            &sample_result_shell(),
+            &base,
+            ExportFormat::Html,
+        ))
+        .unwrap();
+
+        let html = std::fs::read_to_string(dir.path().join("empty_report.html")).unwrap();
+        assert!(html.contains("Objects: 0 users, 0 groups, 0 computers, 0 trusts"));
+        assert!(!html.contains("<h2>"));
+    }
+
+    #[test]
+    fn test_export_html_does_not_overlap_stem_exports() {
+        use tokio_test::block_on;
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("out");
+        block_on(export_results(
+            &sample_result_shell(),
+            &base,
+            ExportFormat::Html,
+        ))
+        .unwrap();
+        block_on(export_results(
+            &sample_result_shell(),
+            &base,
+            ExportFormat::JsonPretty,
+        ))
+        .unwrap();
+
+        assert!(dir.path().join("out_report.html").exists());
+        assert!(dir.path().join("out").exists());
+        // json export must not have been diverted to the html name
+        assert!(
+            std::fs::read_to_string(dir.path().join("out"))
+                .unwrap()
+                .starts_with('{')
         );
     }
 }

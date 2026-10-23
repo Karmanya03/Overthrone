@@ -1,0 +1,204 @@
+[package]
+name = "printpdf"
+version = "0.9.1"
+authors = [
+    "Felix Schütt <felix.schuett@maps4print.com>",
+    "Julien Schminke <julien.schminke@web.de",
+]
+repository = "https://github.com/fschutt/printpdf"
+homepage = "https://github.com/fschutt/printpdf"
+license = "MIT"
+readme = "README.md"
+description = "Rust library for reading and writing PDF files"
+keywords = ["pdf", "gui", "graphics", "wkhtmltopdf"]
+categories = ["gui"]
+exclude = ["./assets/*", "./doc/*", "./examples/*"]
+autoexamples = false
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+lopdf = { version = "0.39.0", default-features = false, features = ["time"]}
+time = { version = "0.3.25", default-features = false, features = ["std", "serde", "serde-human-readable"] }
+allsorts = { version = "0.16.1", default-features = false, features = ["flate2_rust"] }
+image = { version = "0.25", default-features = false, optional = true }
+svg2pdf = { version = "0.13.0", optional = true }
+base64 = "0.22.1"
+weezl = "0.1.8"
+serde = { version = "1" }
+serde_derive = { version = "1" }
+flate2 = "1.0.35" # for decompression of builtin fonts
+serde_json = { version = "1" }
+# Feature-gated dependencies
+rust-fontconfig = { version = "2.0.0", default-features = false, features = ["std", "parsing"], optional = true }
+xmlparser = { version = "0.13.6", default-features = false, optional = true }
+web-sys = { version = "0.3.77", optional = true, default-features = false, features = ["console", "ImageData", "Window", "Document", "Blob", "CanvasRenderingContext2d", "HtmlCanvasElement", "HtmlImageElement", "ImageBitmap", "BlobPropertyBag"]}
+wasm-bindgen-futures = { version = "0.4.50", optional = true, default-features = false }
+kuchiki = { version = "0.8.1", optional = true }
+azul-css = { version = "0.0.7", default-features = false, features = ["parser"], optional = true }
+azul-core = { version = "0.0.7", default-features = false, features = ["std"], optional = true }
+azul-layout = { version = "0.0.7", default-features = false, optional = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+wasm-bindgen = { version = "0.2" }
+serde_json = { version = "1" }
+
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+text-diff = "0.4.0"
+
+[features]
+default = ["html"]
+# Basic text layout without hyphenation
+text_layout = ["dep:azul-css", "dep:azul-core", "dep:azul-layout", "azul-layout/std", "azul-layout/text_layout", "azul-layout/font_loading"]
+# Add hyphenation support
+text_layout_hyphenation = ["text_layout", "azul-layout/text_layout_hyphenation"]
+# HTML/CSS layout
+html = ["text_layout_hyphenation", "dep:kuchiki", "dep:rust-fontconfig", "dep:xmlparser", "azul-layout/xml", "azul-layout/pdf"]
+# HTML with multithreaded font loading (faster on desktop, not available on WASM)
+html_multithreaded = ["html", "rust-fontconfig/multithreading", "azul-layout/font_loading_multithreaded"]
+# SVG support
+svg = ["html", "dep:svg2pdf", "azul-layout/svg"]
+# Image decoding support
+images = ["dep:image"]
+# Browser/WASM support
+js-sys = ["dep:js-sys", "web-sys", "wasm-bindgen-futures"]
+# Image format features
+gif = ["images", "image/gif"]
+jpeg = ["images", "image/jpeg"]
+png = ["images", "image/png"]
+pnm = ["images", "image/pnm"]
+tiff = ["images", "image/tiff"]
+bmp = ["images", "image/bmp"]
+ico = ["images", "image/ico"]
+tga = ["images", "image/tga"]
+hdr = ["images", "image/hdr"]
+dds = ["images", "image/dds"]
+webp = ["images", "image/webp"]
+rayon = ["images", "image/rayon"] # enables multithreading for decoding images
+
+[package.metadata.docs.rs]
+all-features = true
+
+[target.'cfg(all(target_arch="wasm32",target_os="unknown"))'.dependencies]
+js-sys = { version = "0.3.40", optional = true }
+wasm-bindgen-futures = { version = "0.4.50", default-features = false }
+getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[[example]]
+name = "advanced"
+required-features = []
+
+[[example]]
+name = "bookmarks"
+required-features = []
+
+[[example]]
+name = "customfont"
+required-features = []
+
+[[example]]
+name = "graphics"
+required-features = []
+
+[[example]]
+name = "html"
+required-features = ["html"]
+
+[[example]]
+name = "css_shapes"
+required-features = ["html"]
+
+[[example]]
+name = "html_full"
+required-features = ["html"]
+
+[[example]]
+name = "margin_collapse"
+path = "examples/margin_collapse.rs"
+required-features = ["html"]
+
+[[example]]
+name = "margin_collapse_inline"
+path = "examples/margin_collapse_inline.rs"
+required-features = ["html"]
+
+[[example]]
+name = "margin_collapse_border_test"
+path = "examples/margin_collapse_border_test.rs"
+required-features = ["html"]
+
+[[example]]
+name = "margin_collapse_comprehensive"
+path = "examples/margin_collapse_comprehensive.rs"
+required-features = ["html"]
+
+[[example]]
+name = "debug_text_node_inheritance"
+path = "examples/debug_text_node_inheritance.rs"
+required-features = ["html"]
+
+[[example]]
+name = "html_full_debug"
+path = "examples/html_full_debug.rs"
+required-features = ["html"]
+
+[[example]]
+name = "image"
+required-features = ["images", "png"]
+
+[[example]]
+name = "layers"
+required-features = []
+
+[[example]]
+name = "multipage"
+required-features = []
+
+[[example]]
+name = "svg"
+required-features = ["svg"]
+
+[[example]]
+name = "text"
+required-features = []
+
+[[example]]
+name = "shape"
+required-features = ["html"]
+
+[[example]]
+name = "pagination_test"
+required-features = ["html"]
+
+[[example]]
+name = "otf-font"
+required-features = []
+
+[[example]]
+name = "baseline_alignment"
+path = "examples/baseline_alignment.rs"
+required-features = ["html"]
+
+[[example]]
+name = "table_debug"
+path = "examples/table_debug.rs"
+required-features = ["html"]
+
+[[example]]
+name = "debug_pagination"
+path = "examples/debug_pagination.rs"
+required-features = ["html"]
+
+[[example]]
+name = "debug_displaylist"
+path = "examples/debug_displaylist.rs"
+required-features = ["html"]
+
+[[example]]
+name = "pagination_boundary_test"
+path = "examples/pagination_boundary_test.rs"
+required-features = ["html"]
+

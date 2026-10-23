@@ -11,7 +11,7 @@ name = "overthrone_relay"
 path = "src/lib.rs"
 
 [dependencies]
-overthrone-core = { version = "0.4.9", path = "../overthrone-core" }
+overthrone-core = { version = "0.5.0", path = "../overthrone-core" }
 tokio.workspace = true
 futures.workspace = true
 tracing.workspace = true
@@ -26,6 +26,7 @@ cmac.workspace = true
 rand.workspace = true
 base64.workspace = true
 async-trait = "0.1"
+kerberos_crypto.workspace = true
 rustls-native-certs = "0.8.3"
 rustls = { version = "0.23" }
 tokio-rustls = "0.26.4"

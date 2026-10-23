@@ -349,7 +349,7 @@ fn scan_region_for_creds(region: &[u8], creds: &mut HashMap<String, MinidumpCred
         return;
     }
 
-    // Scan for 32-char hex NTLM hashes
+    // Scan for 32-char hex NTLM hashes + Kerberos RC4/AES-128 keys
     let mut i = 0;
     while i + 32 <= region.len() {
         if is_hex_string(&region[i..i + 32]) {
@@ -362,17 +362,55 @@ fn scan_region_for_creds(region: &[u8], creds: &mut HashMap<String, MinidumpCred
                     .to_ascii_lowercase();
 
                 if !is_trivial_hash(&hash_lower) && !is_zero_string(&hash_lower) {
-                    let username = find_username_context(region, i);
-                    let key = hash_lower.clone();
-                    creds.entry(key).or_insert_with(|| MinidumpCredential {
-                        identity: username,
-                        ntlm: Some(hash_lower),
-                        aes256: None,
-                        aes128: None,
-                        rc4: None,
-                        plaintext: None,
-                        session_type: None,
-                    });
+                    // Classify by key-type markers in the surrounding context
+                    // (mirrors mimikatz sekurlsa::ekeys differentiation)
+                    if context_has_marker(region, i, "aes128", 96) {
+                        let username = find_username_context(region, i);
+                        let entry =
+                            creds
+                                .entry(username.clone())
+                                .or_insert_with(|| MinidumpCredential {
+                                    identity: username,
+                                    ntlm: None,
+                                    aes256: None,
+                                    aes128: None,
+                                    rc4: None,
+                                    plaintext: None,
+                                    session_type: None,
+                                });
+                        if entry.aes128.is_none() {
+                            entry.aes128 = Some(hash_lower);
+                        }
+                    } else if context_has_marker(region, i, "rc4", 96) {
+                        let username = find_username_context(region, i);
+                        let entry =
+                            creds
+                                .entry(username.clone())
+                                .or_insert_with(|| MinidumpCredential {
+                                    identity: username,
+                                    ntlm: None,
+                                    aes256: None,
+                                    aes128: None,
+                                    rc4: None,
+                                    plaintext: None,
+                                    session_type: None,
+                                });
+                        if entry.rc4.is_none() {
+                            entry.rc4 = Some(hash_lower);
+                        }
+                    } else {
+                        let username = find_username_context(region, i);
+                        let key = hash_lower.clone();
+                        creds.entry(key).or_insert_with(|| MinidumpCredential {
+                            identity: username,
+                            ntlm: Some(hash_lower),
+                            aes256: None,
+                            aes128: None,
+                            rc4: None,
+                            plaintext: None,
+                            session_type: None,
+                        });
+                    }
                 }
                 i += 32;
                 continue;
@@ -416,6 +454,41 @@ fn scan_region_for_creds(region: &[u8], creds: &mut HashMap<String, MinidumpCred
         }
         i += 1;
     }
+}
+
+/// Case-insensitive substring search over raw bytes (pure).
+fn contains_ascii_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() || hay.len() < needle.len() {
+        return false;
+    }
+    let first = needle[0].to_ascii_lowercase();
+    let mut i = 0;
+    while i + needle.len() <= hay.len() {
+        if hay[i].to_ascii_lowercase() == first
+            && hay[i..i + needle.len()].eq_ignore_ascii_case(needle)
+        {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+/// Look for a key-type marker (e.g. `rc4`, `aes128`) in both ASCII and
+/// UTF-16LE encodings within `window` bytes preceding a hex key (pure).
+fn context_has_marker(region: &[u8], pos: usize, marker: &str, window: usize) -> bool {
+    let start = pos.saturating_sub(window);
+    let ctx = &region[start..pos];
+    if contains_ascii_ci(ctx, marker.as_bytes()) {
+        return true;
+    }
+    // UTF-16LE form: each byte followed by a NUL
+    let mut utf16_marker = Vec::with_capacity(marker.len() * 2);
+    for b in marker.bytes() {
+        utf16_marker.push(b);
+        utf16_marker.push(0);
+    }
+    contains_ascii_ci(ctx, &utf16_marker)
 }
 
 /// Find a printable username string near a credential at the given position.
@@ -1036,5 +1109,95 @@ mod tests {
         for cred in &result.credentials {
             assert!(cred.aes256.is_none());
         }
+    }
+
+    // -----------------------------------------------------------
+    // EKeys classification (sekurlsa::ekeys parity)
+    // -----------------------------------------------------------
+
+    const TEST_RC4_KEY: &str = "aabbccddeeff00112233445566778899";
+    const TEST_AES128_KEY: &str = "11223344556677881122334455667788";
+    const TEST_NTLM_HASH: &str = "31aabbccddeeff001122334455667799";
+
+    #[test]
+    fn test_rc4_marker_classifies_rc4_key() {
+        let region = format!("kerberos:rc4_hmac\x00{}", TEST_RC4_KEY);
+        let mut creds = HashMap::new();
+        scan_region_for_creds(region.as_bytes(), &mut creds);
+        let entry = creds
+            .values()
+            .find(|c| c.rc4.is_some())
+            .expect("RC4 key should be classified");
+        assert_eq!(entry.rc4.as_deref(), Some(TEST_RC4_KEY));
+        assert!(entry.ntlm.is_none());
+    }
+
+    #[test]
+    fn test_aes128_marker_classifies_aes128_key() {
+        let region = format!("Kerberos:AES128\x00{}", TEST_AES128_KEY);
+        let mut creds = HashMap::new();
+        scan_region_for_creds(region.as_bytes(), &mut creds);
+        let entry = creds
+            .values()
+            .find(|c| c.aes128.is_some())
+            .expect("AES128 key should be classified");
+        assert_eq!(entry.aes128.as_deref(), Some(TEST_AES128_KEY));
+        assert!(entry.ntlm.is_none());
+    }
+
+    #[test]
+    fn test_no_marker_defaults_to_ntlm() {
+        let region = format!("OAQsalt0123\x00{}", TEST_NTLM_HASH);
+        let mut creds = HashMap::new();
+        scan_region_for_creds(region.as_bytes(), &mut creds);
+        let entry = creds
+            .values()
+            .find(|c| c.ntlm.is_some())
+            .expect("NTLM should be default classification");
+        assert_eq!(entry.ntlm.as_deref(), Some(TEST_NTLM_HASH));
+        assert!(entry.rc4.is_none() && entry.aes128.is_none());
+    }
+
+    #[test]
+    fn test_utf16le_rc4_marker_classifies() {
+        // UTF-16LE "rc4" = 72 00 63 00 34 00
+        let mut region_bytes: Vec<u8> = b"kerberos\x00salt ".to_vec();
+        region_bytes.extend_from_slice(b"r\x00c\x004\x00\x00\x00_hmac\x00");
+        region_bytes.extend_from_slice(TEST_RC4_KEY.as_bytes());
+        let mut creds = HashMap::new();
+        scan_region_for_creds(&region_bytes, &mut creds);
+        let entry = creds
+            .values()
+            .find(|c| c.rc4.is_some())
+            .expect("UTF-16LE RC4 marker should classify");
+        assert_eq!(entry.rc4.as_deref(), Some(TEST_RC4_KEY));
+    }
+
+    #[test]
+    fn test_contains_ascii_ci() {
+        assert!(contains_ascii_ci(b"KERBEROS_rc4_hmac", b"rc4"));
+        assert!(contains_ascii_ci(b"RC4_HMAC", b"rc4"));
+        assert!(contains_ascii_ci(b"QuickBrownFox", b"brown"));
+        assert!(!contains_ascii_ci(b"plain", b"rc4"));
+        assert!(!contains_ascii_ci(b"rc", b"rc4"));
+    }
+
+    #[test]
+    fn test_context_has_marker_window() {
+        // Marker within the 96-byte window before hex
+        let mut bytes: Vec<u8> = vec![b'a'; 90];
+        bytes.extend_from_slice(b"rc4\x00");
+        bytes.extend_from_slice(TEST_RC4_KEY.as_bytes());
+        let key_pos = bytes.len() - 32;
+        assert!(context_has_marker(&bytes, key_pos, "rc4", 96));
+        assert!(!context_has_marker(&bytes, key_pos, "aes128", 96));
+
+        // Marker outside window is not seen
+        let mut far: Vec<u8> = vec![b'a'; 10];
+        far.extend_from_slice(b"rc4\x00");
+        far.extend_from_slice(&[b'x'; 110]);
+        far.extend_from_slice(TEST_RC4_KEY.as_bytes());
+        let far_key_pos = far.len() - 32;
+        assert!(!context_has_marker(&far, far_key_pos, "rc4", 96));
     }
 }

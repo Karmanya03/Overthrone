@@ -1,5 +1,6 @@
 //! Protocol implementations for AD enumeration
 
+pub mod adws;
 pub mod breakfast;
 pub mod coerce;
 pub mod dcom;
@@ -16,7 +17,9 @@ pub mod ldap;
 pub mod netbios;
 pub mod netlogon;
 pub mod ntlm;
+pub mod ntlm_leak;
 pub mod pkinit;
+pub mod printnightmare;
 pub mod registry;
 pub mod rid;
 pub mod secretsdump;
@@ -46,11 +49,26 @@ pub use kpasswd::{
 };
 pub use netbios::{NbnsNodeStatus, SmbNegotiateResult, netbios_discovery, smb_negotiate};
 pub use netlogon::{
-    ZerologonCheckMethod, ZerologonCheckResult, aes_cfb8_decrypt, aes_cfb8_encrypt,
+    ZEROLOGON_MAX_ATTEMPTS_DEFAULT, ZerologonCheckMethod, ZerologonCheckResult,
+    ZerologonExploitResult, aes_cfb8_decrypt, aes_cfb8_encrypt, build_password_set2_stub,
     compute_netlogon_credential, netlogon_session_key, normalize_computer_name, zerologon_check,
-    zerologon_probe,
+    zerologon_exploit, zerologon_probe,
+};
+pub use ntlm_leak::{
+    NtlmLeakFile, NtlmLeakFormat, format_ntlm_leak_summary, generate_ntlm_leak,
+    generate_ntlm_leak_bundle, normalize_unc, write_ntlm_leak_files,
 };
 pub use pkinit::{CertificateGenerator, PkinitAuthenticator, PkinitConfig, PkinitResult};
+pub use printnightmare::{
+    APD_FLAGS_EXPLOIT, DEFAULT_CONFIG_FILE, DEFAULT_ENVIRONMENT, ERROR_ACCESS_DENIED,
+    ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, EnumProbe, PrintDriverInfo,
+    PrintNightmareMode, PrintNightmareResult, PrintNightmareVerdict, RPC_E_ACCESS_DENIED,
+    STATUS_ACCESS_DENIED, build_add_printer_driver_ex_stub, build_check_stub,
+    build_delete_printer_driver_ex_stub, build_enum_printer_drivers_stub_round1,
+    build_enum_printer_drivers_stub_round2, classify_add_status, is_rpc_fault,
+    parse_drivers_payload, parse_enum_round1, parse_enum_round2, printnightmare_check,
+    printnightmare_delete, printnightmare_exploit, printnightmare_list, tail_status,
+};
 pub use smb2::{SigningDiagnostics, SigningVariant};
 pub use targeted_kerberoast::{
     TargetedKerberoastConfig, TargetedKerberoastError, TargetedKerberoastResult,

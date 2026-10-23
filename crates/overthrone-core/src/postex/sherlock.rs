@@ -47,6 +47,12 @@ impl SherlockConfig {
             "CVE-2025-21333",
             "CVE-2025-26647",
             "CVE-2025-32729",
+            "CVE-2026-96951",
+            "CVE-2026-56155",
+            "CVE-2026-21533",
+            "CVE-2026-32202",
+            "CVE-2026-21510",
+            "CVE-2026-21513",
         ]
         .into_iter()
         .map(String::from)
@@ -76,6 +82,10 @@ pub struct CveEntry {
     pub required_kbs: Vec<String>,
     pub exploit_recommendation: String,
     pub exploit_path: Option<String>,
+    /// In-the-wild exploitation status (CISA KEV / vendor advisory).
+    /// Used to prioritize findings whose patch level is not KB-verifiable.
+    #[serde(default)]
+    pub actively_exploited: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -89,6 +99,9 @@ pub struct SherlockFinding {
     pub exploit_recommendation: String,
     pub exploit_path: Option<String>,
     pub is_vulnerable: bool,
+    /// CISA KEV / in-the-wild exploitation status propagated from CveEntry.
+    #[serde(default)]
+    pub actively_exploited: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -346,7 +359,10 @@ pub fn check_cve_vulnerability(
         .filter(|kb| !is_kb_installed(kb, installed_kbs))
         .cloned()
         .collect();
-    let is_vulnerable = !missing.is_empty();
+    // Patch level is only KB-verifiable when required_kbs is populated;
+    // for actively exploited CVEs whose KB correlation is not established,
+    // the KEV status alone justifies flagging the host.
+    let is_vulnerable = !missing.is_empty() || cve.actively_exploited;
     Some(SherlockFinding {
         cve_id: cve.id.clone(),
         title: cve.title.clone(),
@@ -357,6 +373,7 @@ pub fn check_cve_vulnerability(
         exploit_recommendation: cve.exploit_recommendation.clone(),
         exploit_path: cve.exploit_path.clone(),
         is_vulnerable,
+        actively_exploited: cve.actively_exploited,
     })
 }
 
@@ -371,6 +388,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB3143141".into()],
             exploit_recommendation: "Use secondary logon handle privilege escalation via token manipulation.".into(),
             exploit_path: Some("exploit/windows/local/ms16_032_secondary_logon_handle_privesc".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2016-7255".into(),
@@ -381,6 +399,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB3199135".into()],
             exploit_recommendation: "Abuse Win32k SetWindowLongPtr kernel callback for elevation.".into(),
             exploit_path: Some("exploit/windows/local/ms16_135_create_window_struct".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2017-0213".into(),
@@ -391,6 +410,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4015217".into(), "KB4019472".into()],
             exploit_recommendation: "Exploit COM aggregate marshaller to elevate from medium IL to system.".into(),
             exploit_path: Some("exploit/windows/local/cve_2017_0213_com_elevation".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2018-8120".into(),
@@ -401,6 +421,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4134651".into()],
             exploit_recommendation: "Use null pointer dereference in Win32k for kernel elevation.".into(),
             exploit_path: Some("exploit/windows/local/cve_2018_8120_win32k".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2019-1130".into(),
@@ -411,6 +432,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4507435".into(), "KB4507469".into()],
             exploit_recommendation: "Race window in kernel transaction manager for token theft.".into(),
             exploit_path: Some("exploit/windows/local/cve_2019_1130_windowspage".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2019-0841".into(),
@@ -421,6 +443,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4493510".into()],
             exploit_recommendation: "Hijack elevated hardlink permissions via Windows AppX deployment.".into(),
             exploit_path: Some("exploit/windows/local/cve_2019_0841_permissions".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2020-0683".into(),
@@ -431,6 +454,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4532691".into()],
             exploit_recommendation: "Exploit kernel type confusion in Windows GDI component.".into(),
             exploit_path: Some("exploit/windows/local/cve_2020_0683".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2020-0787".into(),
@@ -441,6 +465,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4534310".into()],
             exploit_recommendation: "Abuse BITS COM interface to overwrite arbitrary files as SYSTEM.".into(),
             exploit_path: Some("exploit/windows/local/cve_2020_0787_bits".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2020-1020".into(),
@@ -451,6 +476,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4549951".into()],
             exploit_recommendation: "Use font parsing vulnerability in kernel-mode driver for elevation.".into(),
             exploit_path: Some("exploit/windows/local/cve_2020_1020".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2021-1732".into(),
@@ -461,6 +487,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB4601319".into()],
             exploit_recommendation: "Exploit Win32k window object type confusion for kernel elevation.".into(),
             exploit_path: Some("exploit/windows/local/cve_2021_1732_win32k".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2021-36934".into(),
@@ -471,6 +498,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5005033".into()],
             exploit_recommendation: "Read SAM/SYSTEM/SECURITY hives from VSS shadow copies as any user.".into(),
             exploit_path: Some("builtin/hivenightmare".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2021-40449".into(),
@@ -481,6 +509,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5006670".into(), "KB5006674".into()],
             exploit_recommendation: "Use use-after-free in NtGdiResetDC for kernel code execution.".into(),
             exploit_path: Some("exploit/windows/local/cve_2021_40449".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2022-21894".into(),
@@ -491,6 +520,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5010793".into()],
             exploit_recommendation: "Bypass Secure Boot via Baton Drop to load unsigned bootmgr.".into(),
             exploit_path: Some("exploit/windows/local/cve_2022_21894_baton_drop".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2022-26923".into(),
@@ -501,6 +531,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5014754".into()],
             exploit_recommendation: "Elevate via ADCS ESC6/ESC9 certificate enrollment with userPrincipalName.".into(),
             exploit_path: Some("builtin/certifried".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2022-30190".into(),
@@ -511,6 +542,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5014699".into()],
             exploit_recommendation: "Use malicious Office document to invoke msdt.exe for code execution.".into(),
             exploit_path: Some("exploit/windows/fileformat/cve_2022_30190_follina".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2023-21746".into(),
@@ -521,6 +553,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5026361".into()],
             exploit_recommendation: "Exploit kernel object manager race condition for token privileges.".into(),
             exploit_path: Some("exploit/windows/local/cve_2023_21746".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2023-36874".into(),
@@ -531,6 +564,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5028166".into()],
             exploit_recommendation: "Abuse WER to create arbitrary files and load DLLs as SYSTEM.".into(),
             exploit_path: Some("exploit/windows/local/cve_2023_36874".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2024-20656".into(),
@@ -541,6 +575,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5034441".into()],
             exploit_recommendation: "Use kernel handle table manipulation to escalate privileges.".into(),
             exploit_path: Some("exploit/windows/local/cve_2024_20656".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2024-38063".into(),
@@ -551,6 +586,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5043178".into()],
             exploit_recommendation: "Trigger IPv6 neighbor discovery packet handling for kernel RCE.".into(),
             exploit_path: Some("exploit/windows/local/cve_2024_38063".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2025-21296".into(),
@@ -561,6 +597,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5050001".into()],
             exploit_recommendation: "Placeholder recommendation for future 2025 escalation path.".into(),
             exploit_path: None,
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2025-29969".into(),
@@ -571,6 +608,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5055528".into()],
             exploit_recommendation: "Use MS-EVEN ElfrBackupEventLogW / ElfrClearLogFileW to create arbitrary files as SYSTEM for sandbox bypass or DLL planting.".into(),
             exploit_path: Some("builtin/ms-even-createfile".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2025-21333".into(),
@@ -581,6 +619,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5050008".into()],
             exploit_recommendation: "Exploit Hyper-V NT kernel memory corruption for local elevation.".into(),
             exploit_path: Some("exploit/windows/local/cve_2025_21333".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2025-26647".into(),
@@ -591,6 +630,7 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5055523".into()],
             exploit_recommendation: "Target RDP service for pre-auth remote code execution.".into(),
             exploit_path: Some("exploit/windows/rdp/cve_2025_26647".into()),
+            ..Default::default()
         },
         CveEntry {
             id: "CVE-2025-32729".into(),
@@ -601,6 +641,112 @@ pub fn build_cve_database() -> Vec<CveEntry> {
             required_kbs: vec!["KB5056587".into()],
             exploit_recommendation: "Abuse Windows Installer rollback script for SYSTEM elevation.".into(),
             exploit_path: Some("exploit/windows/local/cve_2025_32729".into()),
+            ..Default::default()
+        },
+        // ===== 2026 in-the-wild entries (CISA KEV-confirmed, NVD-correlated) =====
+        CveEntry {
+            id: "CVE-2026-96951".into(),
+            title: "Windows Shell Command Injection RCE".into(),
+            severity: "High".into(),
+            affected_versions: vec![
+                "windows 10".into(),
+                "windows 11".into(),
+                "windows server 2025".into()
+            ],
+            affected_builds: Vec::new(),
+            required_kbs: Vec::new(),
+            exploit_recommendation: "Command injection reachable from the Windows shell; \
+                     actively exploited in the wild (CISA KEV 2026-10-13). Verify \
+                     the latest cumulative update before trusting shell handlers."
+                .into(),
+            exploit_path: None,
+            actively_exploited: true,
+        },
+        CveEntry {
+            id: "CVE-2026-56155".into(),
+            title: "AD FS ACL LPE".into(),
+            severity: "High".into(),
+            affected_versions: vec![
+                "windows server 2016".into(),
+                "windows server 2019".into(),
+                "windows server 2022".into(),
+                "windows server 2025".into()
+            ],
+            affected_builds: Vec::new(),
+            required_kbs: Vec::new(),
+            exploit_recommendation: "AD FS object ACL weakness allows local privilege \
+                     escalation; actively exploited (CISA KEV 2026-07-14). Contain \
+                     by auditing AD FS folder/file ACLs and service accounts."
+                .into(),
+            exploit_path: None,
+            actively_exploited: true,
+        },
+        CveEntry {
+            id: "CVE-2026-21533".into(),
+            title: "Windows RDP Privilege Management EoP".into(),
+            severity: "High".into(),
+            affected_versions: vec![
+                "windows 10".into(),
+                "windows 11".into(),
+                "windows server 2025".into()
+            ],
+            affected_builds: Vec::new(),
+            required_kbs: Vec::new(),
+            exploit_recommendation: "RDP privilege management flaw permits elevation; \
+                     actively exploited (CISA KEV 2026-02-10). Patch before reusing \
+                     sessions with elevated RDP tokens."
+                .into(),
+            exploit_path: None,
+            actively_exploited: true,
+        },
+        CveEntry {
+            id: "CVE-2026-32202".into(),
+            title: "Windows Shell UI Spoofing".into(),
+            severity: "Medium".into(),
+            affected_versions: vec!["windows 10".into(), "windows 11".into()],
+            affected_builds: Vec::new(),
+            required_kbs: Vec::new(),
+            exploit_recommendation: "Windows shell spoofing weakness useful as a \
+                     phishing/UAC lure; actively exploited (CISA KEV 2026-04-28)."
+                .into(),
+            exploit_path: None,
+            actively_exploited: true,
+        },
+        CveEntry {
+            id: "CVE-2026-21510".into(),
+            title: "Windows Shell Security Feature Bypass".into(),
+            severity: "High".into(),
+            affected_versions: vec![
+                "windows 10".into(),
+                "windows 11".into(),
+                "windows server 2025".into()
+            ],
+            affected_builds: Vec::new(),
+            required_kbs: Vec::new(),
+            exploit_recommendation: "Windows shell security feature bypass; actively \
+                     exploited (CISA KEV 2026-02-10). Chain with low-priv footholds \
+                     to subvert shell-based mitigations."
+                .into(),
+            exploit_path: None,
+            actively_exploited: true,
+        },
+        CveEntry {
+            id: "CVE-2026-21513".into(),
+            title: "MSHTML Security Feature Bypass".into(),
+            severity: "High".into(),
+            affected_versions: vec![
+                "windows 10".into(),
+                "windows 11".into(),
+                "windows server 2025".into()
+            ],
+            affected_builds: Vec::new(),
+            required_kbs: Vec::new(),
+            exploit_recommendation: "MSHTML platform security bypass; actively exploited \
+                     (CISA KEV 2026-02-10). Confirm mshtml-based content filtering is \
+                     current on the latest cumulative update."
+                .into(),
+            exploit_path: None,
+            actively_exploited: true,
         },
     ]
 }
@@ -638,6 +784,12 @@ pub fn generate_exploit_recommendation(finding: &SherlockFinding) -> ExploitReco
         "CVE-2024-38063" | "CVE-2025-26647" => "Network Protocol RCE",
         "CVE-2025-29969" => "RPC Arbitrary File Creation",
         "CVE-2025-32729" => "Installer Rollback Abuse",
+        "CVE-2026-96951" => "Shell Command Injection",
+        "CVE-2026-56155" => "ACL Modification",
+        "CVE-2026-21533" => "RDP Privilege Abuse",
+        "CVE-2026-32202" => "Shell UI Spoofing",
+        "CVE-2026-21510" => "Security Feature Bypass",
+        "CVE-2026-21513" => "MSHTML Security Bypass",
         _ => "Kernel Driver",
     };
     let reliability = if finding.severity == "Critical" {
@@ -653,7 +805,8 @@ pub fn generate_exploit_recommendation(finding: &SherlockFinding) -> ExploitReco
         requires_admin: technique == "Kernel Driver"
             || technique == "Token Manipulation"
             || technique == "RPC Arbitrary File Creation"
-            || technique == "Installer Rollback Abuse",
+            || technique == "Installer Rollback Abuse"
+            || technique == "ACL Modification",
         reliability: reliability.into(),
         notes: finding.exploit_recommendation.clone(),
     }
@@ -686,9 +839,16 @@ fn format_text(result: &SherlockResult) -> String {
     ));
     out.push_str("\nFindings:\n");
     for f in &result.findings {
+        let kev = if f.actively_exploited { " [KEV]" } else { "" };
         out.push_str(&format!(
-            "  [{}] {} - {} - Vulnerable: {}\n    Missing KBs: {:?}\n    Exploit: {}\n",
-            f.severity, f.cve_id, f.title, f.is_vulnerable, f.missing_kbs, f.exploit_recommendation
+            "  [{}]{} {} - {} - Vulnerable: {}\n    Missing KBs: {:?}\n    Exploit: {}\n",
+            f.severity,
+            kev,
+            f.cve_id,
+            f.title,
+            f.is_vulnerable,
+            f.missing_kbs,
+            f.exploit_recommendation
         ));
     }
     out.push_str("\nRecommendations:\n");
@@ -747,7 +907,7 @@ mod tests {
         assert!(cfg.os_version.is_none());
         assert!(cfg.build_number.is_none());
         assert!(cfg.installed_kbs.is_empty());
-        assert_eq!(cfg.cves_to_check.len(), 24);
+        assert_eq!(cfg.cves_to_check.len(), 30);
         assert_eq!(cfg.output_format, SherlockOutputFormat::Text);
     }
 
@@ -802,6 +962,160 @@ mod tests {
     }
 
     #[test]
+    fn test_2026_cves_actively_exploited() {
+        let db = build_cve_database();
+        let wanted = [
+            "CVE-2026-96951",
+            "CVE-2026-56155",
+            "CVE-2026-21533",
+            "CVE-2026-32202",
+            "CVE-2026-21510",
+            "CVE-2026-21513",
+        ];
+        for id in wanted {
+            let entry = db
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap_or_else(|| panic!("{id} missing from database"));
+            assert!(entry.actively_exploited, "{id} must be KEV-flagged");
+        }
+    }
+
+    #[test]
+    fn test_legacy_entries_not_actively_exploited() {
+        let db = build_cve_database();
+        let kev_count = db.iter().filter(|c| c.actively_exploited).count();
+        assert_eq!(kev_count, 6, "exactly the six 2026-KEV entries");
+        assert!(!db.iter().all(|c| c.actively_exploited));
+    }
+
+    #[test]
+    fn test_kev_entry_without_kbs_flags_vulnerable() {
+        let db = build_cve_database();
+        let cve = db
+            .iter()
+            .find(|c| c.id == "CVE-2026-96951")
+            .expect("2026-96951 present");
+        assert!(cve.required_kbs.is_empty());
+        let finding = check_cve_vulnerability(cve, "Windows 11", Some(22631), &[]).unwrap();
+        assert!(finding.is_vulnerable, "KEV status pressures the verdict");
+        assert!(finding.missing_kbs.is_empty());
+        assert!(finding.actively_exploited);
+    }
+
+    #[test]
+    fn test_legacy_entry_unaffected_by_kev_logic() {
+        let db = build_cve_database();
+        let cve = db
+            .iter()
+            .find(|c| c.id == "CVE-2016-0099")
+            .expect("2016-0099 present");
+        assert!(!cve.actively_exploited);
+        // KB installed -> patched -> not vulnerable
+        let finding =
+            check_cve_vulnerability(cve, "Windows 7", Some(7601), &["KB3143141".into()]).unwrap();
+        assert!(!finding.is_vulnerable);
+        assert!(!finding.actively_exploited);
+    }
+
+    #[test]
+    fn test_kev_marked_in_text_output() {
+        let result = SherlockResult {
+            os_version: "Windows 11".into(),
+            build_number: Some(22631),
+            installed_kbs: vec![],
+            findings: vec![SherlockFinding {
+                cve_id: "CVE-2026-96951".into(),
+                title: "Windows Shell Command Injection RCE".into(),
+                severity: "High".into(),
+                affected_versions: vec![],
+                required_kbs: vec![],
+                missing_kbs: vec![],
+                exploit_recommendation: "KEV".into(),
+                exploit_path: None,
+                is_vulnerable: true,
+                actively_exploited: true,
+            }],
+            vulnerable_count: 1,
+            exploit_recommendations: vec![],
+        };
+        let text = format_text(&result);
+        assert!(text.contains("[KEV]"), "KEV marker rendered in text output");
+        assert!(text.contains("[High] [KEV] CVE-2026-96951"));
+    }
+
+    #[test]
+    fn test_2026_recommendation_techniques() {
+        let cases = [
+            ("CVE-2026-96951", "Shell Command Injection", false),
+            ("CVE-2026-56155", "ACL Modification", true),
+            ("CVE-2026-21533", "RDP Privilege Abuse", false),
+            ("CVE-2026-32202", "Shell UI Spoofing", false),
+            ("CVE-2026-21510", "Security Feature Bypass", false),
+            ("CVE-2026-21513", "MSHTML Security Bypass", false),
+        ];
+        for (cve_id, expected_technique, expected_admin) in cases {
+            let finding = SherlockFinding {
+                cve_id: cve_id.into(),
+                title: "t".into(),
+                severity: "High".into(),
+                affected_versions: vec![],
+                required_kbs: vec![],
+                missing_kbs: vec![],
+                exploit_recommendation: "n".into(),
+                exploit_path: None,
+                is_vulnerable: true,
+                actively_exploited: false,
+            };
+            let rec = generate_exploit_recommendation(&finding);
+            assert_eq!(rec.technique, expected_technique, "{cve_id} technique");
+            assert_eq!(rec.requires_admin, expected_admin, "{cve_id} admin");
+        }
+    }
+
+    #[test]
+    fn test_default_cves_includes_2026() {
+        let defaults = SherlockConfig::default_cves();
+        for id in [
+            "CVE-2026-96951",
+            "CVE-2026-56155",
+            "CVE-2026-21533",
+            "CVE-2026-32202",
+            "CVE-2026-21510",
+            "CVE-2026-21513",
+        ] {
+            assert!(defaults.iter().any(|c| c == id), "{id} in default list");
+        }
+    }
+
+    #[test]
+    fn test_cve_entry_serde_backcompat() {
+        // Old persisted JSON without the actively_exploited key must deserialize.
+        let legacy = r#"{
+            "id": "CVE-2021-36934",
+            "title": "HiveNightmare",
+            "severity": "Critical",
+            "affected_versions": ["windows 10"],
+            "affected_builds": [19044],
+            "required_kbs": ["KB5005033"],
+            "exploit_recommendation": "Read hives",
+            "exploit_path": null
+        }"#;
+        let entry: CveEntry = serde_json::from_str(legacy).expect("legacy JSON");
+        assert!(!entry.actively_exploited);
+
+        let kev_json = r#"{"id":"CVE-2026-96951","title":"x","severity":"High",
+            "affected_versions":[],"affected_builds":[],"required_kbs":[],
+            "exploit_recommendation":"n","exploit_path":null,"actively_exploited":true}"#;
+        let entry: CveEntry = serde_json::from_str(kev_json).expect("KEV JSON");
+        assert!(entry.actively_exploited);
+
+        // Round trip via Serialize keeps the field.
+        let json = serde_json::to_string(&entry).expect("serialize");
+        assert!(json.contains("actively_exploited\":true"));
+    }
+
+    #[test]
     fn test_is_kb_installed() {
         let kbs = vec!["KB5005033".into(), "KB5010793".into()];
         assert!(is_kb_installed("kb5005033", &kbs));
@@ -820,6 +1134,7 @@ mod tests {
             required_kbs: vec!["KB5005033".into()],
             exploit_recommendation: "Read hives".into(),
             exploit_path: Some("builtin/hivenightmare".into()),
+            ..Default::default()
         };
         let finding = check_cve_vulnerability(&cve, "Windows 10", Some(19044), &[]).unwrap();
         assert!(finding.is_vulnerable);
@@ -837,6 +1152,7 @@ mod tests {
             required_kbs: vec!["KB5005033".into()],
             exploit_recommendation: "Read hives".into(),
             exploit_path: Some("builtin/hivenightmare".into()),
+            ..Default::default()
         };
         let finding =
             check_cve_vulnerability(&cve, "Windows 10", Some(19044), &["KB5005033".into()])
@@ -890,6 +1206,7 @@ mod tests {
                 exploit_recommendation: "Read hives".into(),
                 exploit_path: None,
                 is_vulnerable: true,
+                actively_exploited: false,
             }],
             vulnerable_count: 1,
             exploit_recommendations: vec![],
@@ -912,6 +1229,7 @@ mod tests {
             exploit_recommendation: "Read hives".into(),
             exploit_path: None,
             is_vulnerable: true,
+            actively_exploited: false,
         };
         let rec = generate_exploit_recommendation(&finding);
         assert_eq!(rec.cve_id, "CVE-2021-36934");

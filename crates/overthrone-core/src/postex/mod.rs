@@ -35,6 +35,7 @@ pub mod ldap_force_update;
 pub mod litterbox;
 pub mod lsaiso;
 pub mod minidump_parser;
+pub mod ntds_dit;
 pub mod opsec;
 pub mod sherlock;
 pub mod skeleton_key;

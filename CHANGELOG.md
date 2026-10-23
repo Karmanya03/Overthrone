@@ -1,5 +1,90 @@
 # Changelog
 
+## v0.5.0 (2026-10-23)
+
+Big one. Six brand new commands, two new relay protocols, real Kerberos
+ticket capture on the SMB listener, and enough under-the-hood work to make
+the whole toolset sit alongside Impacket and NetExec rather than trailing
+them.
+
+### New commands
+
+- **`ovt zerologon`** - ZeroLogon (CVE-2020-1472), the full chain in pure Rust
+  and native SMB2 with signed Netlogon. `check` runs the deterministic
+  empty-machine-password test, `probe` does the non-destructive 1-in-256
+  verification (`--max-attempts` to tune it), and `exploit` performs the full
+  bypass and blanks the DC machine account password via
+  `NetrServerPasswordSet2`. Won't touch the DC without `--force`, and on
+  success it prints the post-exploitation steps (DCSync and password
+  restoration) instead of leaving you on your own.
+- **`ovt printnightmare`** - PrintNightmare spooler checks and delivery:
+  `check`, `exploit` (DLL path against a writable driver dir), `list` to walk
+  printers and drivers, `delete` to clean up the dropper afterwards. Runs
+  over an authenticated SMB session, or drops back to a null session when you
+  don't have credentials yet. Giving `--username` without `--password` is a
+  hard error rather than a half-login.
+- **`ovt adws`** - LDAP-free domain enumeration over Active Directory Web
+  Services. `enum` pulls users, groups, computers, OUs and domain trust info
+  in one authenticated sweep; `search` runs a raw query with a custom filter,
+  base DN and attribute set. Works where LDAP ports are filtered or you'd
+  rather not touch them.
+- **`ovt ticket`** - describes a captured ticket straight from disk:
+  KIRBI, ccache or raw AP-REQ. Shows realm, sname, etypes, kvno, and all the
+  timestamps, and flags whether a ticket is a TGT. `--format json|human`
+  overrides the global output format just for this command.
+- **`ovt events`** - clear and export Windows event logs remotely through
+  MS-EVEN (`ovt events clear`, `ovt events backup`). `clear` targets a log by
+  name (default `System`) or a full path; `backup` pulls a log off the box to
+  anywhere reachable. Useful for the cleanup half of an engagement.
+- **`ovt playbook`** - twenty-six task-oriented engagement recipes across the
+  usual kill chain, every one written with the exact flags the CLI accepts
+  (nothing copy-pasted from docs that drifted).
+
+### Also inside existing commands
+
+- **`ovt ntlm leak`** - generates the named-leak file family
+  (`.library-ms`, `.searchConnector-ms`, `.url`, `.website`, `.scf`, and a
+  `.lnk` best effort) that make Explorer authenticate straight to an attacker
+  share - CVE-2025-24054, CVE-2025-24071, CVE-2024-43451. `--output-dir`
+  writes them to disk, `--formats` picks a subset, `--bundle` prints the
+  whole set base64 for pasting.
+- **`ovt dump-lsass`** - the minidump parser now separates Kerberos keys the
+  way mimikatz ekeys does: AES-256, AES-128, RC4-HMAC, plus named and WDigest
+  plaintext, all emitted in hashcat-ready lines.
+- **`ovt hunt`** - the vulnerability DB picked up six 2026 CISA-KEV entries
+  (CVE-2026-96951, -56155, -21533, -32202, -21510, -21513), and
+  actively-exploited flags now count as findings even when no KB is missing.
+
+### Relay engine
+
+- **File share mode on the SMB listener** (`--share-root`) - serves a local
+  directory over SMB2 like Impacket's smbserver.py, without Python. Shares
+  advertise properly, sessions can create directories and read/write files
+  directly onto your attack box, and NTLM credential capture still fires on
+  every session setup.
+- **Kerberos capture** (`--krb5-capture --ticket-dir <dir>`) - the listener
+  now pulls Kerberos tickets straight out of NTLM/BIND exchanges on SMB, with
+  or without a full relay. Every save is a real `.kirbi` you can reuse. Add
+  `--krb-key <hex>` and tickets are decrypted inline into `ptt_*` files
+  carrying the session key, ready for pass-the-ticket.
+- **SMTP and IMAP relay targets** - `smtp://` (EHLO, AUTH NTLM, and a real
+  mail transaction on success) and `imap://` (CAPABILITY, AUTHENTICATE NTLM,
+  both server's challenge styles) fill out the relay surface, so the focused
+  coerced-auth flows now work against mail servers too.
+
+### Quality of life
+
+- Full sweep across the command tree: a number of subcommands used to panic
+  the instant you ran them (argument collisions flagged only on that node),
+  including parts of `printnightmare`, `certighost`, `adcs esc14`, `adws`,
+  `events backup`, `graph path`, and `ntlm leak`. All fixed together; every
+  `--help` path now renders cleanly.
+- Reporting: findings can be exported as HTML alongside the existing
+  Markdown, JSON, and CSV options.
+- Reference docs (`COMMAND_LIST.md`, `README.md`) were regenerated and
+  cross-checked against the actual CLI output, and the playbook entries were
+  re-audited one by one against what the binary actually accepts.
+
 ## v0.4.8 (2026-09-20)
 
 ### SMB shell is now a real smbclient

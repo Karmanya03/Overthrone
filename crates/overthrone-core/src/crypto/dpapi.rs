@@ -152,61 +152,7 @@ impl DpapiDecryptor {
 
     /// Parse a raw DPAPI masterkey file into its components.
     fn parse_masterkey_file(&self, data: &[u8]) -> Result<DpapiMasterkeyFile> {
-        if data.len() < 48 {
-            return Err(OverthroneError::Decryption(format!(
-                "Masterkey file too short: {} bytes (expected >= 48)",
-                data.len()
-            )));
-        }
-
-        let version = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
-
-        if !(2..=4).contains(&version) {
-            return Err(OverthroneError::Decryption(format!(
-                "Unsupported masterkey version: {} (expected 2, 3, or 4)",
-                version
-            )));
-        }
-
-        let mut guid = [0u8; 16];
-        guid.copy_from_slice(&data[4..20]);
-
-        // Skip 8 bytes of unknown data (offset 20-27)
-        let mut unknown = vec![0u8; 8];
-        unknown.copy_from_slice(&data[20..28]);
-
-        // Read the user SID (null-terminated UTF-16LE string)
-        let sid_start = 28;
-        let mut sid_end = sid_start;
-        while sid_end + 1 < data.len() {
-            if data[sid_end] == 0 && data[sid_end + 1] == 0 {
-                break;
-            }
-            sid_end += 2;
-        }
-        let sid_bytes = &data[sid_start..sid_end];
-        let user_sid = String::from_utf16_lossy(
-            &sid_bytes
-                .chunks(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
-                .collect::<Vec<_>>(),
-        );
-
-        // Encrypted data starts after the null-terminated SID (padded to 8-byte boundary)
-        let data_start = (sid_end + 2 + 7) & !7;
-        let encrypted_data = if data_start < data.len() {
-            data[data_start..].to_vec()
-        } else {
-            Vec::new()
-        };
-
-        Ok(DpapiMasterkeyFile {
-            version,
-            guid,
-            user_sid,
-            encrypted_data,
-            unknown,
-        })
+        parse_masterkey_file_bytes(data)
     }
 
     /// Decrypt a DPAPI credential file using the cached masterkeys.
@@ -319,6 +265,116 @@ fn derive_key_from_backup(backup_key: &[u8], guid: &[u8; 16]) -> Result<Vec<u8>>
 
     // Return first 32 bytes for AES-256
     Ok(key_bytes[..32].to_vec())
+}
+
+/// Parse a raw DPAPI masterkey file into its components (without
+/// decryption). Exposed for LSA `G$DPAPI_MACHINE_KEY` / `G$DPAPI_USER_KEY`
+/// secrets, whose value is exactly this structure.
+///
+/// Layout (MS-DPAP, VAULT.KDF-adjacent masterkey file):
+/// - 0x00: version u32 LE (2, 3, or 4)
+/// - 0x04: masterkey GUID (16 raw bytes, mixed-endian as on disk)
+/// - 0x14: 8 unknown bytes
+/// - 0x1C: user SID, null-terminated UTF-16LE
+/// - 8-byte-aligned: encrypted masterkey payload
+pub fn parse_masterkey_file_bytes(data: &[u8]) -> Result<DpapiMasterkeyFile> {
+    if data.len() < 48 {
+        return Err(OverthroneError::Decryption(format!(
+            "Masterkey file too short: {} bytes (expected >= 48)",
+            data.len()
+        )));
+    }
+
+    let version = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+
+    if !(2..=4).contains(&version) {
+        return Err(OverthroneError::Decryption(format!(
+            "Unsupported masterkey version: {} (expected 2, 3, or 4)",
+            version
+        )));
+    }
+
+    let mut guid = [0u8; 16];
+    guid.copy_from_slice(&data[4..20]);
+
+    // Skip 8 bytes of unknown data (offset 20-27)
+    let mut unknown = vec![0u8; 8];
+    unknown.copy_from_slice(&data[20..28]);
+
+    // Read the user SID (null-terminated UTF-16LE string)
+    let sid_start = 28;
+    let mut sid_end = sid_start;
+    while sid_end + 1 < data.len() {
+        if data[sid_end] == 0 && data[sid_end + 1] == 0 {
+            break;
+        }
+        sid_end += 2;
+    }
+    let sid_bytes = &data[sid_start..sid_end];
+    let user_sid = String::from_utf16_lossy(
+        &sid_bytes
+            .chunks(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect::<Vec<_>>(),
+    );
+
+    // Encrypted data starts after the null-terminated SID (padded to 8-byte boundary)
+    let data_start = (sid_end + 2 + 7) & !7;
+    let encrypted_data = if data_start < data.len() {
+        data[data_start..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    Ok(DpapiMasterkeyFile {
+        version,
+        guid,
+        user_sid,
+        encrypted_data,
+        unknown,
+    })
+}
+
+/// Format a DPAPI GUID as stored on disk (`{DDDDDDDD-DDDD-DDDD-DDDD-DDDDDDDDDDDD}`).
+///
+/// Data1/Data2/Data3 are read little-endian (matching the Windows `GUID`
+/// memory layout that DPAPI files and mimikatz use); Data4 is copied as-is.
+pub fn format_dpapi_guid(guid: &[u8; 16]) -> String {
+    format!(
+        "{{{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}}}",
+        u32::from_le_bytes([guid[0], guid[1], guid[2], guid[3]]),
+        u16::from_le_bytes([guid[4], guid[5]]),
+        u16::from_le_bytes([guid[6], guid[7]]),
+        guid[8],
+        guid[9],
+        guid[10],
+        guid[11],
+        guid[12],
+        guid[13],
+        guid[14],
+        guid[15]
+    )
+}
+
+/// Parse a text GUID (`{...}` or bare, standard text form) back into the
+/// 16-byte on-disk representation. Inverse of [`format_dpapi_guid`].
+pub fn parse_guid_text(text: &str) -> Option<[u8; 16]> {
+    let hex_only: String = text.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if hex_only.len() != 32 {
+        return None;
+    }
+    let d1 = u32::from_str_radix(&hex_only[0..8], 16).ok()?;
+    let d2 = u16::from_str_radix(&hex_only[8..12], 16).ok()?;
+    let d3 = u16::from_str_radix(&hex_only[12..16], 16).ok()?;
+
+    let mut out = [0u8; 16];
+    out[0..4].copy_from_slice(&d1.to_le_bytes());
+    out[4..6].copy_from_slice(&d2.to_le_bytes());
+    out[6..8].copy_from_slice(&d3.to_le_bytes());
+    for (i, pair) in hex_only.as_bytes()[16..32].chunks(2).enumerate() {
+        out[8 + i] = u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(out)
 }
 
 /// Decrypt a DPAPI-encrypted payload using AES-256-GCM.

